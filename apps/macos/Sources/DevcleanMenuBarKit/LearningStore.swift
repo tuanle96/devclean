@@ -13,6 +13,7 @@ public struct LearningSummary: Equatable, Sendable {
     public let growthBytes: Int64
     public let recreatedCount: Int
     public let feedbackCount: Int
+    public let approvedCount: Int
 
     public static let empty = LearningSummary(
         observedDays: 0,
@@ -21,7 +22,8 @@ public struct LearningSummary: Equatable, Sendable {
         totalObservedBytes: 0,
         growthBytes: 0,
         recreatedCount: 0,
-        feedbackCount: 0
+        feedbackCount: 0,
+        approvedCount: 0
     )
 }
 
@@ -37,10 +39,39 @@ private struct LearningSnapshot: Codable {
 }
 
 private struct LearningState: Codable {
-    var version = 1
+    var version = 2
     var snapshots: [LearningSnapshot] = []
     var feedback: [String: FeedbackDecision] = [:]
     var cleanedAtUnix: [String: UInt64] = [:]
+    var approvedRules: [String: ReviewRule] = [:]
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case snapshots
+        case feedback
+        case cleanedAtUnix
+        case approvedRules
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = 2
+        snapshots = try values.decodeIfPresent([LearningSnapshot].self, forKey: .snapshots) ?? []
+        feedback = try values.decodeIfPresent(
+            [String: FeedbackDecision].self,
+            forKey: .feedback
+        ) ?? [:]
+        cleanedAtUnix = try values.decodeIfPresent(
+            [String: UInt64].self,
+            forKey: .cleanedAtUnix
+        ) ?? [:]
+        approvedRules = try values.decodeIfPresent(
+            [String: ReviewRule].self,
+            forKey: .approvedRules
+        ) ?? [:]
+    }
 }
 
 @MainActor
@@ -61,7 +92,7 @@ public final class LearningStore {
         self.stateURL = selectedURL
         if let data = try? Data(contentsOf: selectedURL),
            let decoded = try? JSONDecoder().decode(LearningState.self, from: data),
-           decoded.version == 1
+             decoded.version == 2
         {
             state = decoded
         } else {
@@ -136,7 +167,8 @@ public final class LearningStore {
             totalObservedBytes: currentBytes,
             growthBytes: growth,
             recreatedCount: recreated,
-            feedbackCount: state.feedback.count
+            feedbackCount: state.feedback.count,
+            approvedCount: state.approvedRules.count
         )
     }
 
@@ -145,11 +177,36 @@ public final class LearningStore {
         path: String
     ) throws {
         state.feedback[path] = decision
+        if decision == .neverClean {
+            state.approvedRules.removeValue(forKey: path)
+        }
         try persist()
     }
 
     public func feedback(for path: String) -> FeedbackDecision? {
         state.feedback[path]
+    }
+
+    public var approvedReviewPaths: [String] {
+        state.approvedRules.keys.sorted()
+    }
+
+    public func approvedRule(for path: String) -> ReviewRule? {
+        state.approvedRules[path]
+    }
+
+    public func approve(_ candidate: ReviewCandidate) throws {
+        guard let rule = candidate.suggestedRule else {
+            throw LearningStoreError.missingSuggestedRule
+        }
+        state.approvedRules[candidate.path] = rule
+        state.feedback.removeValue(forKey: candidate.path)
+        try persist()
+    }
+
+    public func revokeApproval(for path: String) throws {
+        state.approvedRules.removeValue(forKey: path)
+        try persist()
     }
 
     public func markCleaned(paths: [String], at date: Date = Date()) throws {
@@ -185,6 +242,17 @@ public final class LearningStore {
             return Int64(clamping: left - right)
         }
         return -Int64(clamping: right - left)
+    }
+}
+
+public enum LearningStoreError: LocalizedError, Equatable {
+    case missingSuggestedRule
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingSuggestedRule:
+            "This observation does not have a scanner-owned rule to approve."
+        }
     }
 }
 

@@ -191,3 +191,29 @@ fn quarantine_should_list_and_restore_held_candidate() -> Result<()> {
     assert!(modules.is_dir());
     Ok(())
 }
+
+#[test]
+fn clean_should_accept_only_scanner_recognized_approved_review_path() -> Result<()> {
+    let temporary = tempdir()?;
+    fs::write(
+        temporary.path().join("Package.swift"),
+        "// swift-tools-version: 6.0",
+    )?;
+    let build = temporary.path().join(".build");
+    fs::create_dir_all(&build)?;
+    fs::write(build.join("artifact"), "generated")?;
+
+    cargo_bin_cmd!("devclean")
+        .arg("clean")
+        .arg("--yes")
+        .arg("--approve-review-path")
+        .arg(&build)
+        .arg("--only-path")
+        .arg(&build)
+        .arg(temporary.path())
+        .assert()
+        .success();
+
+    assert!(!build.exists());
+    Ok(())
+}

@@ -25,6 +25,7 @@ public final class AppModel: ObservableObject {
     private let analytics: any AnalyticsService
     private var observationTimer: Timer?
     private var backgroundMonitoringStarted = false
+    private var pendingLearningStatus: String?
 
     public init(
         client: DevcleanClient = DevcleanClient(),
@@ -120,7 +121,10 @@ public final class AppModel: ObservableObject {
         Task {
             defer { phase = .idle }
             do {
-                let report = try await client.scan(settings: settings)
+                let report = try await client.scan(
+                    settings: settings,
+                    approvedReviewPaths: learningStore.approvedReviewPaths
+                )
                 self.report = report
                 selectedPaths = Set(report.candidates.compactMap { candidate in
                     learningStore.feedback(for: candidate.path) == .neverClean
@@ -130,7 +134,8 @@ public final class AppModel: ObservableObject {
                 if settings.learningMode {
                     learningSummary = try learningStore.record(report: report)
                 }
-                statusMessage = scanStatus(report)
+                statusMessage = pendingLearningStatus ?? scanStatus(report)
+                pendingLearningStatus = nil
                 refreshAvailableSpace()
                 await refreshQuarantine()
                 analytics.track(.scanCompleted, properties: [
@@ -146,6 +151,7 @@ public final class AppModel: ObservableObject {
                 ])
                 emitLearningSummary()
             } catch {
+                pendingLearningStatus = nil
                 errorMessage = error.localizedDescription
                 analytics.capture(error: error, operation: "scan")
                 analytics.track(.scanFailed, properties: ["phase": "scan"])
@@ -164,9 +170,16 @@ public final class AppModel: ObservableObject {
         Task {
             defer { phase = .idle }
             do {
-                _ = try await client.clean(paths: paths, settings: settings)
+                _ = try await client.clean(
+                    paths: paths,
+                    settings: settings,
+                    approvedReviewPaths: learningStore.approvedReviewPaths
+                )
                 try learningStore.markCleaned(paths: paths)
-                let refreshed = try await client.scan(settings: settings)
+                let refreshed = try await client.scan(
+                    settings: settings,
+                    approvedReviewPaths: learningStore.approvedReviewPaths
+                )
                 report = refreshed
                 selectedPaths = Set(refreshed.candidates.compactMap { candidate in
                     learningStore.feedback(for: candidate.path) == .neverClean
@@ -212,6 +225,41 @@ public final class AppModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
             analytics.capture(error: error, operation: "feedback")
+        }
+    }
+
+    public func approveReviewCandidate(_ candidate: ReviewCandidate) {
+        guard !isBusy else { return }
+        do {
+            try learningStore.approve(candidate)
+            learningSummary = learningStore.summary()
+            pendingLearningStatus = "Approved "
+                + (candidate.suggestedRule?.title ?? "review rule")
+                + " for this project."
+            analytics.track(.reviewRuleApproved, properties: [
+                "rule": candidate.suggestedRule?.rawValue ?? "unknown",
+            ])
+            scan()
+        } catch {
+            errorMessage = error.localizedDescription
+            analytics.capture(error: error, operation: "approve_review_rule")
+        }
+    }
+
+    public func revokeReviewApproval(path: String, rule: ReviewRule?) {
+        guard !isBusy else { return }
+        do {
+            try learningStore.revokeApproval(for: path)
+            learningSummary = learningStore.summary()
+            selectedPaths.remove(path)
+            pendingLearningStatus = "Revoked the learned cleanup approval for this project."
+            analytics.track(.reviewRuleRevoked, properties: [
+                "rule": rule?.rawValue ?? "unknown",
+            ])
+            scan()
+        } catch {
+            errorMessage = error.localizedDescription
+            analytics.capture(error: error, operation: "revoke_review_rule")
         }
     }
 

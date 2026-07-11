@@ -33,7 +33,7 @@ Replace `<skill-dir>` with this skill's absolute directory. If the launcher cann
 
 Add `--redact-paths` before sharing a report. Use `--older-than` and `--min-size` to reduce noise, not to weaken classification.
 
-For a multi-day evaluation, run `scan --learning --format json`. Known active artifacts may appear in `learning_observations` even when age filters keep them out of `candidates`. Unknown cache-like directories appear only in `review_candidates`; never pass them to cleanup.
+For a multi-day evaluation, run `scan --learning --format json`. Known active artifacts may appear in `learning_observations` even when age filters keep them out of `candidates`. Unknown cache-like directories appear only in `review_candidates`. Pass `--approve-review-path` only when the report contains a `suggested_rule` and the user approves that exact path; Rust will refuse arbitrary approvals.
 
 ## Cleanup profiles
 

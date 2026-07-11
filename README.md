@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-65d6ad.svg)](LICENSE)
 [![MSRV: 1.85](https://img.shields.io/badge/MSRV-1.85-79b8ff.svg)](Cargo.toml)
 
-`devclean` is a safety-first Rust CLI and native SwiftUI macOS menu bar app for auditing and removing rebuildable development artifacts. Learning Mode measures local growth, surfaces unknown cache-like directories as review-only observations, and learns per-path feedback without making ambiguous data cleanable. Structured local diagnostics and opt-in, privacy-filtered Sentry monitoring keep failures visible.
+`devclean` is a safety-first Rust CLI and native SwiftUI macOS menu bar app for auditing and removing rebuildable development artifacts. Learning Mode measures local growth, surfaces unknown cache-like directories as review-only observations, and can promote an exact path only through a scanner-owned rule approved by the user. Structured local diagnostics and opt-in, privacy-filtered Sentry monitoring keep failures visible.
 
 ## Safety by construction
 
@@ -78,6 +78,7 @@ Ambiguous `dist`, `out`, and `coverage` directories can appear as Learning Mode 
 - `--target-free 100GiB`: select only enough largest candidates to reach a free-space target on the first root filesystem.
 - `--allow-tracked`: explicit escape hatch for vendored/generated content committed to Git.
 - `--learning`: measure active known artifacts independently of age filters and surface large unknown cache-like directories as review-only.
+- `--approve-review-path PATH`: approve an exact observation only when it still matches a scanner-owned rule such as SwiftPM `.build` beside `Package.swift`.
 - `--quarantine-for 7d`: retain selected artifacts in adjacent safety holds; this delays disk reclamation until purge.
 
 ## Configuration
@@ -144,7 +145,7 @@ brew install tuanle96/tap/devclean
 
 ### Native macOS menu bar app
 
-The SwiftUI app scans at launch and every six hours, displays growth history, separates safe and review-only observations, accepts `Always select` / `Never clean` feedback, manages restorable safety holds, and keeps structured local logs. It bundles the same Rust helper used by the CLI and never deletes files from Swift.
+The SwiftUI app scans at launch and every six hours, displays growth history, separates safe and review-only observations, exposes approve/revoke controls for scanner-owned rules, accepts `Always select` / `Never clean` feedback, manages restorable safety holds, and keeps structured local logs. It bundles the same Rust helper used by the CLI and never deletes files from Swift.
 
 ```bash
 apps/macos/scripts/build-app.sh

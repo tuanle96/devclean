@@ -60,16 +60,29 @@ public struct FoundationCommandExecutor: CommandExecuting {
 }
 
 public enum DevcleanArguments {
-    public static func scan(settings: ScanSettings) -> [String] {
-        var arguments = ["scan"] + shared(settings: settings)
+    public static func scan(
+        settings: ScanSettings,
+        approvedReviewPaths: [String] = []
+    ) -> [String] {
+        var arguments = ["scan"] + shared(
+            settings: settings,
+            approvedReviewPaths: approvedReviewPaths
+        )
         if settings.learningMode {
             arguments.append("--learning")
         }
         return arguments + ["--format", "json"]
     }
 
-    public static func clean(paths: [String], settings: ScanSettings) -> [String] {
-        var arguments = ["clean"] + shared(settings: settings)
+    public static func clean(
+        paths: [String],
+        settings: ScanSettings,
+        approvedReviewPaths: [String] = []
+    ) -> [String] {
+        var arguments = ["clean"] + shared(
+            settings: settings,
+            approvedReviewPaths: approvedReviewPaths
+        )
         for path in paths.sorted() {
             arguments += ["--only-path", path]
         }
@@ -87,7 +100,10 @@ public enum DevcleanArguments {
         ["quarantine", "restore", id]
     }
 
-    private static func shared(settings: ScanSettings) -> [String] {
+    private static func shared(
+        settings: ScanSettings,
+        approvedReviewPaths: [String]
+    ) -> [String] {
         var arguments = settings.roots
         for category in settings.categories.sorted(by: { $0.rawValue < $1.rawValue }) {
             arguments += ["--category", category.rawValue]
@@ -103,6 +119,9 @@ public enum DevcleanArguments {
         }
         if let minimumSize = settings.minimumSize {
             arguments += ["--min-size", minimumSize]
+        }
+        for path in approvedReviewPaths.sorted() {
+            arguments += ["--approve-review-path", path]
         }
         return arguments
     }
@@ -155,8 +174,16 @@ public actor DevcleanClient {
         self.executor = executor
     }
 
-    public func scan(settings: ScanSettings) async throws -> ScanReport {
-        let result = try await execute(DevcleanArguments.scan(settings: settings))
+    public func scan(
+        settings: ScanSettings,
+        approvedReviewPaths: [String] = []
+    ) async throws -> ScanReport {
+        let result = try await execute(
+            DevcleanArguments.scan(
+                settings: settings,
+                approvedReviewPaths: approvedReviewPaths
+            )
+        )
         do {
             return try JSONDecoder().decode(ScanReport.self, from: Data(result.standardOutput.utf8))
         } catch {
@@ -164,8 +191,18 @@ public actor DevcleanClient {
         }
     }
 
-    public func clean(paths: [String], settings: ScanSettings) async throws -> String {
-        let result = try await execute(DevcleanArguments.clean(paths: paths, settings: settings))
+    public func clean(
+        paths: [String],
+        settings: ScanSettings,
+        approvedReviewPaths: [String] = []
+    ) async throws -> String {
+        let result = try await execute(
+            DevcleanArguments.clean(
+                paths: paths,
+                settings: settings,
+                approvedReviewPaths: approvedReviewPaths
+            )
+        )
         return result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

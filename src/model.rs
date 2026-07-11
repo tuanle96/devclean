@@ -37,6 +37,14 @@ pub enum Confidence {
     Protected,
 }
 
+/// A narrowly-scoped cleanup rule that Learning Mode can propose for explicit approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewRule {
+    /// A `.build` directory directly beside a Swift Package manifest.
+    SwiftPackageBuild,
+}
+
 impl Category {
     /// Returns all categories discovered by a comprehensive scan.
     #[must_use]
@@ -90,6 +98,9 @@ pub struct Candidate {
     /// Safety confidence assigned by the scanner.
     #[serde(default)]
     pub confidence: Confidence,
+    /// Explicit learned rule that authorized this candidate, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_rule: Option<ReviewRule>,
 }
 
 /// A large cache-like directory observed by Learning Mode but never selected for cleanup.
@@ -105,6 +116,15 @@ pub struct ReviewCandidate {
     pub modified_at_unix: Option<u64>,
     /// Review candidates are never promoted to safe without an explicit product rule.
     pub confidence: Confidence,
+    /// Product rule that can safely constrain an approval for this path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_rule: Option<ReviewRule>,
+    /// Project root to which the suggested rule would be scoped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<PathBuf>,
+    /// Whether the user has approved the suggested rule for this exact path.
+    #[serde(default)]
+    pub approved: bool,
 }
 
 /// One local-only Learning Mode measurement independent of cleanup eligibility filters.
