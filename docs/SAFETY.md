@@ -16,6 +16,7 @@
 | Hard links inflate estimates | Deduplicate Unix device/inode pairs |
 | Generic output is a deliverable | Keep ambiguous `dist`, `out`, and `coverage` unclassified |
 | Learning heuristic promotes ambiguous data | Review observations are a distinct type and cannot enter cleanup selection |
+| User approves an arbitrary observed path | Approval is accepted only for an exact canonical path matching a scanner-owned rule; cleanup revalidates that rule and Git guard |
 | Sensitive path differs only by case | Protect backup/database/volume names case-insensitively |
 | Docker cleanup destroys persistent state | Never invoke prune with `--volumes`; default Docker mode is build cache only |
 | Global cache rule expands unexpectedly | Exact, platform-aware allowlists; expensive model/runtime caches are separate |
@@ -32,7 +33,7 @@
 - `--expensive-caches` includes model and runtime downloads.
 - `--docker-system` removes stopped containers and unused images/networks in addition to build cache.
 
-The macOS app exposes none of these escape hatches. Its cleanup candidates remain filtered to artifacts older than 7 days and at least 100 MiB. Learning observations ignore the age filter so active growth is visible, but they do not grant cleanup authority.
+The macOS app exposes none of these escape hatches. Its cleanup candidates remain filtered to artifacts older than 7 days and at least 100 MiB. Learning observations ignore the age filter so active growth is visible. An approval grants authority only to the exact path and scanner-owned rule shown in the UI; age, size, containment, symlink, manifest, and Git guards remain mandatory.
 
 Treat these as explicit policy changes, not convenience defaults.
 

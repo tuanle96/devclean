@@ -13,7 +13,7 @@ pub use cleaner::{CleanOptions, CleanReport, clean, clean_with_options};
 pub use config::{Config, config_candidates, load_config, parse_age, parse_bytes};
 pub use model::{
     Candidate, Category, Confidence, LearningObservation, OutputFormat, RenderOptions,
-    ReviewCandidate, ScanReport,
+    ReviewCandidate, ReviewRule, ScanReport,
 };
 pub use quarantine::{
     PurgeReport, QuarantineEntry, default_registry_path, hold, list as list_quarantine,

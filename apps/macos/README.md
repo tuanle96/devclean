@@ -1,6 +1,6 @@
 # Devclean for macOS
 
-`Devclean.app` is a native SwiftUI menu bar client for the Rust safety engine. It scans at launch and every six hours, records 30 days of local growth observations, keeps ambiguous discoveries review-only, and manages restorable safety holds. It never deletes files itself and never invokes a shell.
+`Devclean.app` is a native SwiftUI menu bar client for the Rust safety engine. It scans at launch and every six hours, records 30 days of local growth observations, keeps ambiguous discoveries review-only, and lets users approve or revoke exact paths only through scanner-owned rules. It manages restorable safety holds, never deletes files itself, and never invokes a shell.
 
 ## Requirements
 

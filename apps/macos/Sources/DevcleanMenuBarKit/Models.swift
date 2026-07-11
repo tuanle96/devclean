@@ -42,6 +42,16 @@ public enum Confidence: String, Codable, Sendable {
     case protected
 }
 
+public enum ReviewRule: String, Codable, Hashable, Sendable {
+    case swiftPackageBuild = "swift-package-build"
+
+    public var title: String {
+        switch self {
+        case .swiftPackageBuild: "SwiftPM build cache"
+        }
+    }
+}
+
 public struct CleanupCandidate: Codable, Hashable, Identifiable, Sendable {
     public let category: CleanupCategory
     public let path: String
@@ -49,6 +59,7 @@ public struct CleanupCandidate: Codable, Hashable, Identifiable, Sendable {
     public let reason: String
     public let modifiedAtUnix: UInt64?
     public let confidence: Confidence?
+    public let approvedRule: ReviewRule?
 
     public var id: String { path }
 
@@ -59,6 +70,7 @@ public struct CleanupCandidate: Codable, Hashable, Identifiable, Sendable {
         case reason
         case modifiedAtUnix = "modified_at_unix"
         case confidence
+        case approvedRule = "approved_rule"
     }
 }
 
@@ -68,6 +80,9 @@ public struct ReviewCandidate: Codable, Hashable, Identifiable, Sendable {
     public let reason: String
     public let modifiedAtUnix: UInt64?
     public let confidence: Confidence
+    public let suggestedRule: ReviewRule?
+    public let projectRoot: String?
+    public let approved: Bool
 
     public var id: String { path }
 
@@ -77,6 +92,21 @@ public struct ReviewCandidate: Codable, Hashable, Identifiable, Sendable {
         case reason
         case modifiedAtUnix = "modified_at_unix"
         case confidence
+        case suggestedRule = "suggested_rule"
+        case projectRoot = "project_root"
+        case approved
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        path = try values.decode(String.self, forKey: .path)
+        bytes = try values.decode(UInt64.self, forKey: .bytes)
+        reason = try values.decode(String.self, forKey: .reason)
+        modifiedAtUnix = try values.decodeIfPresent(UInt64.self, forKey: .modifiedAtUnix)
+        confidence = try values.decode(Confidence.self, forKey: .confidence)
+        suggestedRule = try values.decodeIfPresent(ReviewRule.self, forKey: .suggestedRule)
+        projectRoot = try values.decodeIfPresent(String.self, forKey: .projectRoot)
+        approved = try values.decodeIfPresent(Bool.self, forKey: .approved) ?? false
     }
 }
 

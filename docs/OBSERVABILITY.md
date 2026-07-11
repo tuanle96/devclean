@@ -14,6 +14,8 @@ Devclean uses a provider boundary so product code does not depend directly on a 
 | `safety_hold_restored` | category, byte bucket |
 | `safety_hold_purged` | count, byte bucket |
 | `feedback_recorded` | decision |
+| `review_rule_approved` | scanner-owned rule identifier |
+| `review_rule_revoked` | scanner-owned rule identifier |
 | `learning_summary` | observed days, counts, recreated count, signed growth bucket |
 
 Raw paths and localized error messages are allowed only in the private local log. Remote error reporting uses a normalized error domain/code fingerprint and an operation name. Adding a new remote property requires a privacy review and test evidence that it cannot contain user or project identity.

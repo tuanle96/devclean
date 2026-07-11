@@ -60,6 +60,25 @@ func cleanArgumentsContainOnlyExactPathsAndNonInteractiveConfirmation() {
 }
 
 @Test
+func scanAndCleanArgumentsForwardApprovedReviewPaths() {
+    let settings = ScanSettings(roots: ["/Users/me/Dev"])
+    let approved = ["/Users/me/Dev/tool/.build"]
+
+    let scan = DevcleanArguments.scan(
+        settings: settings,
+        approvedReviewPaths: approved
+    )
+    let clean = DevcleanArguments.clean(
+        paths: approved,
+        settings: settings,
+        approvedReviewPaths: approved
+    )
+
+    #expect(scan.contains("--approve-review-path"))
+    #expect(clean.contains("--approve-review-path"))
+}
+
+@Test
 func locatorPrefersExplicitExecutableOverride() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("devclean-locator-\(UUID().uuidString)")
@@ -120,6 +139,81 @@ func learningFeedbackPersistsWithoutLeavingLocalStore() throws {
 
 @MainActor
 @Test
+func approvedReviewRulePersistsForExactScannerSuggestedPath() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("devclean-approval-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let stateURL = directory.appendingPathComponent("learning.json")
+    let candidate = try decodeReviewCandidate()
+    let first = LearningStore(stateURL: stateURL)
+
+    try first.approve(candidate)
+    let reopened = LearningStore(stateURL: stateURL)
+
+    #expect(reopened.approvedRule(for: candidate.path) == .swiftPackageBuild)
+    #expect(reopened.approvedReviewPaths == [candidate.path])
+}
+
+@MainActor
+@Test
+func versionOneLearningStateMigratesWithoutLosingFeedback() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("devclean-migration-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let stateURL = directory.appendingPathComponent("learning.json")
+    let legacy = #"""
+    {
+      "version": 1,
+      "snapshots": [],
+      "feedback": {"/private/project/cache": "never-clean"},
+      "cleanedAtUnix": {}
+    }
+    """#
+    try Data(legacy.utf8).write(to: stateURL)
+
+    let migrated = LearningStore(stateURL: stateURL)
+
+    #expect(migrated.feedback(for: "/private/project/cache") == .neverClean)
+    #expect(migrated.approvedReviewPaths.isEmpty)
+}
+
+@MainActor
+@Test
+func neverCleanFeedbackRevokesExistingApproval() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("devclean-never-clean-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = LearningStore(stateURL: directory.appendingPathComponent("learning.json"))
+    let candidate = try decodeReviewCandidate()
+    try store.approve(candidate)
+
+    try store.recordFeedback(.neverClean, path: candidate.path)
+
+    #expect(store.approvedRule(for: candidate.path) == nil)
+}
+
+@Test
+func legacyReviewCandidateDecodesAsNotApproved() throws {
+    let json = #"""
+    {
+      "path": "/private/project/dist",
+      "bytes": 10,
+      "reason": "cache-like directory",
+      "modified_at_unix": 1234,
+      "confidence": "review"
+    }
+    """#
+
+    let candidate = try JSONDecoder().decode(ReviewCandidate.self, from: Data(json.utf8))
+
+    #expect(!candidate.approved)
+}
+
+@MainActor
+@Test
 func localDiagnosticsWritesStructuredJSONLine() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("devclean-logs-\(UUID().uuidString)")
@@ -165,4 +259,20 @@ private func decodeReport(safeBytes: UInt64, reviewBytes: UInt64?) throws -> Sca
     }
     """#
     return try JSONDecoder().decode(ScanReport.self, from: Data(json.utf8))
+}
+
+private func decodeReviewCandidate() throws -> ReviewCandidate {
+    let json = #"""
+    {
+      "path": "/private/project/.build",
+      "bytes": 1000,
+      "reason": "large cache-like directory beneath a recognized project",
+      "modified_at_unix": 1234,
+      "confidence": "review",
+      "suggested_rule": "swift-package-build",
+      "project_root": "/private/project",
+      "approved": false
+    }
+    """#
+    return try JSONDecoder().decode(ReviewCandidate.self, from: Data(json.utf8))
 }

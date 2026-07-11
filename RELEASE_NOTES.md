@@ -1,12 +1,15 @@
-# devclean v0.4.0
+# devclean v0.4.1
 
-This release turns the native menu bar app into a local learning and observability loop while preserving Rust as the only cleanup authority.
+This patch completes the first review-to-safe Learning Mode loop while preserving Rust as the only cleanup authority.
 
 ## Learning Mode
 
 - Scans at launch and every six hours.
 - Measures active known artifacts independently of cleanup age/category filters.
-- Surfaces large unknown cache-like directories as review-only observations that cannot be cleaned.
+- Suggests a scanner-owned rule for `.build` directories directly beside `Package.swift`.
+- Lets the user approve or revoke that exact SwiftPM build path from the menu bar.
+- Keeps approved paths visible while they wait for the configured cleanup age and size thresholds.
+- Promotes an eligible approved path to `build-output` only after Rust revalidates the rule and Git guard.
 - Keeps up to 30 days and 256 local snapshots, detects recreation after cleanup, and learns `Always select` / `Never clean` feedback.
 
 ## Restorable safety holds

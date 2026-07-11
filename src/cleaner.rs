@@ -10,7 +10,9 @@ use serde::Serialize;
 use crate::model::{Candidate, Category, ScanReport};
 use crate::policy::contains_git_tracked_files;
 use crate::quarantine::{QuarantineEntry, hold};
-use crate::scanner::{classify, expensive_global_cache_paths, global_cache_paths};
+use crate::scanner::{
+    classify, classify_approved_review_candidate, expensive_global_cache_paths, global_cache_paths,
+};
 
 static QUARANTINE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -125,7 +127,11 @@ fn validate_candidate(
         return Err("candidate escaped the configured roots".to_owned());
     }
 
-    let Some((current_category, _)) = classify(&candidate.path) else {
+    let current = candidate.approved_rule.map_or_else(
+        || classify(&candidate.path),
+        |rule| classify_approved_review_candidate(&candidate.path, rule),
+    );
+    let Some((current_category, _)) = current else {
         return Err("candidate no longer matches a rebuildable artifact".to_owned());
     };
     if current_category != candidate.category {
@@ -194,6 +200,7 @@ mod tests {
             min_size: 0,
             protect_git_tracked: false,
             learning_mode: LearningMode::Disabled,
+            approved_review_paths: HashSet::new(),
         }
     }
 

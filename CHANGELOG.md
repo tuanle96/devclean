@@ -4,6 +4,19 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-11
+
+### Added
+
+- Review-to-safe approval flow for SwiftPM `.build` directories directly beside `Package.swift`.
+- Exact-path learned approvals with visible approve/revoke controls in the macOS menu bar app.
+- Approved observations remain visible while waiting for the configured age and size thresholds.
+
+### Security
+
+- Approval never accepts an arbitrary directory: Rust owns the rule, canonicalizes the approved path, repeats symlink/containment/Git checks, and revalidates the Swift package marker immediately before cleanup.
+- Revoking an approval removes the path from cleanup selection and returns it to review-only state.
+
 ## [0.4.0] - 2026-07-11
 
 ### Added
@@ -78,7 +91,8 @@ All notable changes to this project are documented here following [Keep a Change
 - Conservative and comprehensive cleanup profiles.
 - Evidence-based artifact detection, global cache cleanup, Docker cleanup, and companion Codex skill.
 
-[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/tuanle96/devclean/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/tuanle96/devclean/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/tuanle96/devclean/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tuanle96/devclean/compare/v0.2.0...v0.3.0

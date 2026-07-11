@@ -198,6 +198,10 @@ fn redact_report(report: &ScanReport) -> ScanReport {
     }
     for candidate in &mut redacted.review_candidates {
         candidate.path = redact_path(&candidate.path, &report.roots);
+        candidate.project_root = candidate
+            .project_root
+            .as_deref()
+            .map(|path| redact_path(path, &report.roots));
     }
     for observation in &mut redacted.learning_observations {
         observation.path = redact_path(&observation.path, &report.roots);
@@ -274,7 +278,7 @@ fn escape_html(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Candidate, Category, Confidence, ScanReport};
+    use crate::model::{Candidate, Category, Confidence, ReviewCandidate, ReviewRule, ScanReport};
 
     fn report(path: &str) -> ScanReport {
         ScanReport {
@@ -286,6 +290,7 @@ mod tests {
                 reason: "test".to_owned(),
                 modified_at_unix: None,
                 confidence: Confidence::Safe,
+                approved_rule: None,
             }],
             review_candidates: Vec::new(),
             learning_observations: Vec::new(),
@@ -314,6 +319,30 @@ mod tests {
     fn render_should_redact_paths_in_json() -> Result<()> {
         let output = render_with_options(
             &report("/private/project/node_modules"),
+            OutputFormat::Json,
+            RenderOptions { redact_paths: true },
+        )?;
+
+        assert!(!output.contains("/private/project"));
+        Ok(())
+    }
+
+    #[test]
+    fn render_should_redact_review_project_root_in_json() -> Result<()> {
+        let mut input = report("/private/project/node_modules");
+        input.review_candidates.push(ReviewCandidate {
+            path: PathBuf::from("/private/project/.build"),
+            bytes: 2048,
+            reason: "test".to_owned(),
+            modified_at_unix: None,
+            confidence: Confidence::Review,
+            suggested_rule: Some(ReviewRule::SwiftPackageBuild),
+            project_root: Some(PathBuf::from("/private/project")),
+            approved: false,
+        });
+
+        let output = render_with_options(
+            &input,
             OutputFormat::Json,
             RenderOptions { redact_paths: true },
         )?;

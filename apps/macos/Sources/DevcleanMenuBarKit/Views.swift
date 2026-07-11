@@ -134,7 +134,7 @@ public struct MenuContentView: View {
                           }
                       }
                       if !model.visibleReviewCandidates.isEmpty {
-                          Text("Learning Mode · review only")
+                            Text("Learning Mode · approvals")
                               .font(.subheadline.weight(.semibold))
                               .padding(.top, report.candidates.isEmpty ? 0 : 12)
                               .padding(.bottom, 4)
@@ -197,8 +197,13 @@ public struct MenuContentView: View {
             .frame(minHeight: 44)
         }
           .toggleStyle(.checkbox)
-          .contextMenu {
-              Button("Always select this safe artifact") {
+            .contextMenu {
+                if let rule = candidate.approvedRule {
+                    Button("Revoke learned \(rule.title) approval") {
+                        model.revokeReviewApproval(path: candidate.path, rule: rule)
+                    }
+                }
+                Button("Always select this safe artifact") {
                   model.recordFeedback(.alwaysClean, path: candidate.path)
               }
               Button("Never clean this path") {
@@ -216,13 +221,27 @@ public struct MenuContentView: View {
                   .foregroundStyle(.orange)
                   .accessibilityHidden(true)
               VStack(alignment: .leading, spacing: 2) {
-                  HStack {
-                      Text("Needs review")
-                          .font(.subheadline)
-                      Spacer()
-                      Text(ByteFormatting.string(candidate.bytes))
-                          .font(.caption.monospacedDigit())
-                          .foregroundStyle(.secondary)
+                    HStack {
+                        Text(reviewTitle(candidate))
+                            .font(.subheadline)
+                        Spacer()
+                        Text(ByteFormatting.string(candidate.bytes))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        if candidate.suggestedRule != nil {
+                            Button(candidate.approved ? "Revoke" : "Approve") {
+                                if candidate.approved {
+                                    model.revokeReviewApproval(
+                                        path: candidate.path,
+                                        rule: candidate.suggestedRule
+                                    )
+                                } else {
+                                    model.approveReviewCandidate(candidate)
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.mini)
+                        }
                   }
                   Text(candidate.path)
                       .font(.caption)
@@ -233,14 +252,34 @@ public struct MenuContentView: View {
               }
           }
           .frame(minHeight: 44)
-          .contextMenu {
-              Button("Ignore this path") {
+            .contextMenu {
+                if candidate.suggestedRule != nil, !candidate.approved {
+                    Button("Approve this scanner-owned rule") {
+                        model.approveReviewCandidate(candidate)
+                    }
+                }
+                if candidate.approved {
+                    Button("Revoke learned approval") {
+                        model.revokeReviewApproval(
+                            path: candidate.path,
+                            rule: candidate.suggestedRule
+                        )
+                    }
+                }
+                Button("Ignore this path") {
                   model.recordFeedback(.neverClean, path: candidate.path)
               }
           }
           .accessibilityLabel("Review only, \(ByteFormatting.string(candidate.bytes))")
-          .accessibilityHint(candidate.reason)
-      }
+            .accessibilityHint(candidate.reason)
+        }
+
+        private func reviewTitle(_ candidate: ReviewCandidate) -> String {
+            if candidate.approved {
+                return "Approved · waiting for cleanup threshold"
+            }
+            return candidate.suggestedRule?.title ?? "Needs review"
+        }
 
       @ViewBuilder
       private var safetyHoldSummary: some View {

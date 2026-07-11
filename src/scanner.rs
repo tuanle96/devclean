@@ -10,7 +10,7 @@ use directories::BaseDirs;
 use walkdir::WalkDir;
 
 use crate::model::{
-    Candidate, Category, Confidence, LearningObservation, ReviewCandidate, ScanReport,
+    Candidate, Category, Confidence, LearningObservation, ReviewCandidate, ReviewRule, ScanReport,
 };
 use crate::policy::{ExcludePolicy, contains_git_tracked_files};
 
@@ -37,6 +37,8 @@ pub struct ScanOptions {
     pub protect_git_tracked: bool,
     /// Observe large cache-like directories without making them cleanable.
     pub learning_mode: LearningMode,
+    /// Exact review paths approved through a scanner-recognized learning rule.
+    pub approved_review_paths: HashSet<PathBuf>,
 }
 
 /// Controls whether the scanner emits local growth observations.
@@ -91,47 +93,50 @@ pub fn default_roots() -> Vec<PathBuf> {
 /// is invalid.
 pub fn scan(options: &ScanOptions) -> Result<ScanReport> {
     let mut output = ScanAccumulator::default();
-    let mut normalized_roots = Vec::new();
+    let normalized_roots = normalize_roots(&options.roots, &mut output.warnings)?;
 
-    for root in &options.roots {
-        if !root.is_dir() {
-            output
-                .warnings
-                .push(format!("skipped missing root: {}", root.display()));
-            continue;
-        }
-        let normalized = root
-            .canonicalize()
-            .with_context(|| format!("failed to normalize root {}", root.display()))?;
-        normalized_roots.push(normalized);
-    }
-    if normalized_roots.is_empty() {
-        anyhow::bail!("no valid scan roots were found");
-    }
+    let mut effective_options = options.clone();
+    effective_options.approved_review_paths = options
+        .approved_review_paths
+        .iter()
+        .filter_map(|path| path.canonicalize().ok())
+        .collect();
 
     let excludes = ExcludePolicy::new(&options.excludes)?;
     for root in &normalized_roots {
-        scan_root(root, &normalized_roots, options, &excludes, &mut output);
-    }
-
-    if options.include_global_caches && options.categories.contains(&Category::GlobalCache) {
-        add_global_cache_candidates(
-            Category::GlobalCache,
-            global_cache_paths,
+        scan_root(
+            root,
             &normalized_roots,
-            options,
+            &effective_options,
             &excludes,
             &mut output,
         );
     }
-    if options.include_expensive_caches
-        && options.categories.contains(&Category::ExpensiveGlobalCache)
+
+    if effective_options.include_global_caches
+        && effective_options
+            .categories
+            .contains(&Category::GlobalCache)
+    {
+        add_global_cache_candidates(
+            Category::GlobalCache,
+            global_cache_paths,
+            &normalized_roots,
+            &effective_options,
+            &excludes,
+            &mut output,
+        );
+    }
+    if effective_options.include_expensive_caches
+        && effective_options
+            .categories
+            .contains(&Category::ExpensiveGlobalCache)
     {
         add_global_cache_candidates(
             Category::ExpensiveGlobalCache,
             expensive_global_cache_paths,
             &normalized_roots,
-            options,
+            &effective_options,
             &excludes,
             &mut output,
         );
@@ -180,8 +185,26 @@ pub fn scan(options: &ScanOptions) -> Result<ScanReport> {
         total_bytes,
         review_total_bytes,
         observed_total_bytes,
-        protect_git_tracked: options.protect_git_tracked,
+        protect_git_tracked: effective_options.protect_git_tracked,
     })
+}
+
+fn normalize_roots(roots: &[PathBuf], warnings: &mut Vec<String>) -> Result<Vec<PathBuf>> {
+    let mut normalized = Vec::new();
+    for root in roots {
+        if !root.is_dir() {
+            warnings.push(format!("skipped missing root: {}", root.display()));
+            continue;
+        }
+        normalized.push(
+            root.canonicalize()
+                .with_context(|| format!("failed to normalize root {}", root.display()))?,
+        );
+    }
+    if normalized.is_empty() {
+        anyhow::bail!("no valid scan roots were found");
+    }
+    Ok(normalized)
 }
 
 fn scan_root(
@@ -215,7 +238,7 @@ fn scan_root(
         }
 
         let Some((category, reason)) = classify(path) else {
-            if options.learning_mode.is_enabled() {
+            if options.learning_mode.is_enabled() || options.approved_review_paths.contains(path) {
                 if let Some(reason) = classify_review_candidate(path) {
                     walker.skip_current_dir();
                     add_review_candidate(path, reason, options, output);
@@ -304,6 +327,7 @@ fn add_candidate(
         reason: reason.to_owned(),
         modified_at_unix: stats.modified.and_then(system_time_to_unix),
         confidence: Confidence::Safe,
+        approved_rule: None,
     });
 }
 
@@ -352,21 +376,81 @@ fn add_review_candidate(
             }
         }
     }
+    let suggestion = suggested_review_rule(path);
+    let approved_rule = suggestion
+        .as_ref()
+        .map(|(rule, _)| *rule)
+        .filter(|_| options.approved_review_paths.contains(path));
+    let approved = approved_rule.is_some();
+    let category = approved.then_some(Category::BuildOutput);
     output.learning_observations.push(LearningObservation {
         path: path.to_path_buf(),
-        category: None,
+        category,
         bytes: stats.bytes,
         reason: reason.to_owned(),
         modified_at_unix: stats.modified.and_then(system_time_to_unix),
-        confidence: Confidence::Review,
+        confidence: if approved {
+            Confidence::Safe
+        } else {
+            Confidence::Review
+        },
     });
+    if let Some(rule) = approved_rule {
+        if stats.bytes >= options.min_size && is_old_enough(stats.modified, options.older_than) {
+            let Some((category, approved_reason)) = classify_approved_review_candidate(path, rule)
+            else {
+                return;
+            };
+            output.candidates.push(Candidate {
+                category,
+                path: path.to_path_buf(),
+                bytes: stats.bytes,
+                reason: approved_reason.to_owned(),
+                modified_at_unix: stats.modified.and_then(system_time_to_unix),
+                confidence: Confidence::Safe,
+                approved_rule: Some(rule),
+            });
+            return;
+        }
+    }
     output.review_candidates.push(ReviewCandidate {
         path: path.to_path_buf(),
         bytes: stats.bytes,
         reason: reason.to_owned(),
         modified_at_unix: stats.modified.and_then(system_time_to_unix),
         confidence: Confidence::Review,
+        suggested_rule: suggestion.as_ref().map(|(rule, _)| *rule),
+        project_root: suggestion.map(|(_, root)| root),
+        approved,
     });
+}
+
+fn suggested_review_rule(path: &Path) -> Option<(ReviewRule, PathBuf)> {
+    let parent = path.parent()?;
+    classify_approved_review_candidate(path, ReviewRule::SwiftPackageBuild)
+        .map(|_| (ReviewRule::SwiftPackageBuild, parent.to_path_buf()))
+}
+
+/// Revalidates a user-approved review path against its scanner-owned rule.
+#[must_use]
+pub fn classify_approved_review_candidate(
+    path: &Path,
+    rule: ReviewRule,
+) -> Option<(Category, &'static str)> {
+    if is_protected(path) {
+        return None;
+    }
+    match rule {
+        ReviewRule::SwiftPackageBuild => {
+            let parent = path.parent()?;
+            (path.file_name() == Some(OsStr::new(".build"))
+                && parent.join("Package.swift").is_file())
+            .then_some((
+                Category::BuildOutput,
+                "user-approved Swift Package build directory",
+            ))
+        }
+    }
 }
 
 /// Classifies a directory using conservative, filesystem-verifiable markers.
@@ -719,6 +803,7 @@ mod tests {
             min_size: 0,
             protect_git_tracked: false,
             learning_mode: LearningMode::Disabled,
+            approved_review_paths: HashSet::new(),
         }
     }
 
@@ -832,6 +917,89 @@ mod tests {
 
         assert!(report.candidates.is_empty());
         assert_eq!(report.learning_observations.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn learning_mode_should_suggest_swift_package_rule_for_dot_build() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(
+            temporary.path().join("Package.swift"),
+            "// swift-tools-version: 6.0",
+        )?;
+        fs::create_dir_all(temporary.path().join(".build"))?;
+        let mut scan_options = options(temporary.path(), HashSet::from(Category::all()));
+        scan_options.learning_mode = LearningMode::Enabled;
+
+        let report = scan(&scan_options)?;
+
+        assert_eq!(
+            report.review_candidates[0].suggested_rule,
+            Some(ReviewRule::SwiftPackageBuild)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn approved_swift_package_rule_should_promote_dot_build_to_candidate() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(
+            temporary.path().join("Package.swift"),
+            "// swift-tools-version: 6.0",
+        )?;
+        let build = temporary.path().join(".build");
+        fs::create_dir_all(&build)?;
+        fs::write(build.join("artifact"), "generated")?;
+        let mut scan_options = options(temporary.path(), HashSet::new());
+        scan_options.learning_mode = LearningMode::Enabled;
+        scan_options.approved_review_paths.insert(build);
+
+        let report = scan(&scan_options)?;
+
+        assert_eq!(
+            report.candidates[0].approved_rule,
+            Some(ReviewRule::SwiftPackageBuild)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn recent_approved_swift_package_build_should_wait_for_age_threshold() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(
+            temporary.path().join("Package.swift"),
+            "// swift-tools-version: 6.0",
+        )?;
+        let build = temporary.path().join(".build");
+        fs::create_dir_all(&build)?;
+        let mut scan_options = options(temporary.path(), HashSet::new());
+        scan_options.learning_mode = LearningMode::Enabled;
+        scan_options.older_than = Some(Duration::from_secs(86_400));
+        scan_options.approved_review_paths.insert(build);
+
+        let report = scan(&scan_options)?;
+
+        assert!(report.candidates.is_empty() && report.review_candidates[0].approved);
+        Ok(())
+    }
+
+    #[test]
+    fn approval_should_not_promote_dot_build_without_direct_package_manifest() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(
+            temporary.path().join("Package.swift"),
+            "// swift-tools-version: 6.0",
+        )?;
+        let nested = temporary.path().join("nested");
+        let build = nested.join(".build");
+        fs::create_dir_all(&build)?;
+        let mut scan_options = options(temporary.path(), HashSet::new());
+        scan_options.learning_mode = LearningMode::Enabled;
+        scan_options.approved_review_paths.insert(build);
+
+        let report = scan(&scan_options)?;
+
+        assert!(report.candidates.is_empty() && !report.review_candidates[0].approved);
         Ok(())
     }
 

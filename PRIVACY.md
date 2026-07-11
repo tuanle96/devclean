@@ -4,7 +4,7 @@ Devclean is designed for local development workstations. Scanning, classificatio
 
 ## Local data
 
-Learning Mode stores exact artifact paths, byte estimates, confidence, timestamps, per-path `always-clean` / `never-clean` feedback, and cleaned timestamps in `~/Library/Application Support/Devclean/learning.json`. The file is mode 0600, retains at most 30 days and 256 snapshots, and can be reset from Settings.
+Learning Mode stores exact artifact paths, byte estimates, confidence, timestamps, per-path `always-clean` / `never-clean` feedback, scanner-owned rule approvals, and cleaned timestamps in `~/Library/Application Support/Devclean/learning.json`. The file is mode 0600, retains at most 30 days and 256 snapshots, and can be reset from Settings.
 
 Structured logs are written to `~/Library/Logs/Devclean/devclean.jsonl`. Local errors may contain filesystem details needed for diagnosis. The log rotates at 5 MiB and keeps one previous file. “Open local logs” reveals the directory; deleting it disables no product feature.
 

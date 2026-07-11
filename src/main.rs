@@ -86,6 +86,10 @@ struct SharedScanArgs {
     /// Permit cleanup of candidates containing Git-tracked files.
     #[arg(long)]
     allow_tracked: bool,
+
+    /// Approve an exact review path only when it still matches a scanner-owned safe rule.
+    #[arg(long = "approve-review-path", value_name = "PATH")]
+    approved_review_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -557,6 +561,7 @@ fn scan_options(
         } else {
             LearningMode::Disabled
         },
+        approved_review_paths: arguments.approved_review_paths.iter().cloned().collect(),
     })
 }
 

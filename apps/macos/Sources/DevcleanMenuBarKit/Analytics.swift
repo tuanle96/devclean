@@ -11,6 +11,8 @@ public enum AnalyticsEventName: String, Sendable {
     case safetyHoldRestored = "safety_hold_restored"
     case safetyHoldPurged = "safety_hold_purged"
     case feedbackRecorded = "feedback_recorded"
+    case reviewRuleApproved = "review_rule_approved"
+    case reviewRuleRevoked = "review_rule_revoked"
     case learningSummary = "learning_summary"
 }
 
