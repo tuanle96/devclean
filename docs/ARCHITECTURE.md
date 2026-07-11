@@ -12,16 +12,17 @@
 - `docker.rs`: detailed usage, build-cache prune, and volume-preserving system prune.
 - `render.rs`: terminal, JSON, JSONL, redacted, and standalone HTML reports.
 - `main.rs`: CLI orchestration, candidate selection, target-free planning, confirmation, completions, and manpage generation.
+- `apps/macos`: SwiftUI `MenuBarExtra`, user preferences, JSON decoding, and direct process execution of the bundled Rust helper.
 
 ## Cleanup lifecycle
 
 ```text
-CLI + config
+  CLI / macOS menu bar + config
   -> bounded read-only traversal
   -> evidence-based classification
   -> exclude + age + size + Git guards
   -> exact cleanup plan
-  -> optional target-free / interactive selection
+  -> optional target-free / interactive / exact-path selection
   -> user confirmation
   -> containment + category + Git revalidation
   -> atomic same-parent quarantine rename
@@ -30,6 +31,8 @@ CLI + config
 ```
 
 The scan report is not permanent deletion authority. Cleanup repeats live checks. Renaming the final path before recursive deletion narrows the time-of-check/time-of-use window and ensures a path swapped to a symlink is quarantined and rejected rather than followed.
+
+The macOS app is an unprivileged presentation client. It parses `scan --format json`, lets the user select candidates, then invokes `clean --only-path ... --yes`. The Rust process repeats discovery and refuses the whole selection if any requested path is stale or no longer eligible. Swift never invokes a shell or performs filesystem deletion.
 
 ## Size and age accounting
 

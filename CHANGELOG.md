@@ -4,6 +4,20 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-11
+
+### Added
+
+- Native SwiftUI macOS menu bar app with free-space status, scan preview, per-candidate selection, settings, confirmation, and post-clean refresh.
+- Universal macOS app packaging with the Rust helper bundled inside `Devclean.app`.
+- Exact `--only-path` cleanup selection for trusted machine clients and automation.
+- Swift contract tests plus macOS app build and signature verification in CI.
+
+### Security
+
+- Menu bar cleanup always performs a fresh Rust scan and rejects the entire operation if any selected path is no longer eligible.
+- The Swift client invokes the helper directly without a shell and never enables `--allow-tracked` or Docker system cleanup.
+
 ## [0.2.0] - 2026-07-11
 
 ### Added
@@ -30,6 +44,7 @@ All notable changes to this project are documented here following [Keep a Change
 - Conservative and comprehensive cleanup profiles.
 - Evidence-based artifact detection, global cache cleanup, Docker cleanup, and companion Codex skill.
 
-[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/tuanle96/devclean/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tuanle96/devclean/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tuanle96/devclean/releases/tag/v0.1.0
