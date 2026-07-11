@@ -139,7 +139,7 @@ apps/macos/scripts/build-app.sh
 open dist/Devclean.app
 ```
 
-The local build is ad-hoc signed. Public frictionless distribution additionally requires a Developer ID Application certificate and Apple notarization. See [`apps/macos`](apps/macos).
+Local source builds are ad-hoc signed unless `CODE_SIGN_IDENTITY` is provided. Published menu bar archives are Developer ID signed, notarized by Apple, stapled, and Gatekeeper-verified. See [`apps/macos`](apps/macos).
 
 ### Build from source
 

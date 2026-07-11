@@ -19,4 +19,4 @@ cargo publish --locked
 
 Homebrew, Scoop, and WinGet manifests must reference immutable release URLs and the checksums from the final release assets. Never reuse a version or replace an uploaded artifact silently.
 
-The macOS app build is ad-hoc signed by default. A public production release must replace that signature with `Developer ID Application`, verify with `codesign --verify --deep --strict`, submit the archive to Apple's notary service, staple the ticket, and only then publish a Homebrew Cask.
+Local macOS app builds are ad-hoc signed by default. Tagged releases import Developer ID material into an ephemeral keychain, sign with hardened runtime and timestamp, verify with `codesign --verify --deep --strict`, submit to Apple's notary service, staple the ticket, require Gatekeeper acceptance, and only then publish the final archive.
