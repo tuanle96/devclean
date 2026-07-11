@@ -1,30 +1,40 @@
 # Safety model
 
-`devclean` assumes filesystem names can be misleading and filesystem state can change between scanning and deletion.
-
-## Protected assets
-
-The cleanup policy is designed to preserve source code, VCS metadata, backups, databases, Docker volumes, environment files, secrets, and user documents.
+`devclean` assumes names can be misleading, repositories can intentionally track generated output, and filesystem state can change between scan and deletion.
 
 ## Threats and mitigations
 
 | Threat | Mitigation |
 |---|---|
 | Unrelated directory named `target` | Require Cargo build markers |
-| Symlink redirects deletion | Do not follow or accept symlinks |
-| Candidate changes after scan | Reclassify immediately before deletion |
+| Generated-looking output is committed | Block candidate when `git ls-files` finds tracked content |
+| Symlink redirects deletion | Never follow links; reject symlink candidates before and after quarantine |
+| Candidate changes after scan | Reclassify and repeat Git/containment checks immediately before deletion |
+| Validation/removal race | Atomically rename to a unique same-parent quarantine, inspect, then remove |
 | Candidate escapes selected root | Canonical containment check |
-| Mounted storage counted or traversed | Stay on the starting filesystem |
+| Mounted storage is traversed | Stay on the starting filesystem |
 | Hard links inflate estimates | Deduplicate Unix device/inode pairs |
-| Generic output is actually a deliverable | Keep ambiguous `dist`, `out`, and `coverage` unclassified |
-| Docker cleanup destroys database state | Never invoke prune with `--volumes` |
-| Global cache rule expands unexpectedly | Use exact home-relative allowlist paths |
+| Generic output is a deliverable | Keep ambiguous `dist`, `out`, and `coverage` unclassified |
+| Sensitive path differs only by case | Protect backup/database/volume names case-insensitively |
+| Docker cleanup destroys persistent state | Never invoke prune with `--volumes`; default Docker mode is build cache only |
+| Global cache rule expands unexpectedly | Exact, platform-aware allowlists; expensive model/runtime caches are separate |
+| Shared report leaks workstation paths | `--redact-paths` replaces roots/home with placeholders |
+
+## Deliberate escape hatches
+
+- `--yes` removes the final interactive confirmation.
+- `--allow-tracked` permits deletion of candidates containing Git-tracked files.
+- `--expensive-caches` includes model and runtime downloads.
+- `--docker-system` removes stopped containers and unused images/networks in addition to build cache.
+
+Treat these as explicit policy changes, not convenience defaults.
 
 ## Limitations
 
-- Allocated-size reporting remains an estimate and may differ from APFS or container runtime accounting.
-- A separate process can regenerate artifacts during or after cleanup.
-- The CLI cannot determine whether an unused-looking archive or Docker volume is valuable; these assets remain out of scope.
-- `--yes` is intended for deliberate automation and removes the interactive barrier.
+- Quarantine reduces path-replacement risk but is not a complete defense against a hostile process mutating files inside an already-open directory tree.
+- Allocated bytes and target-free planning are estimates, especially on APFS, compressed, sparse, snapshot, and container-backed storage.
+- Directory modification time is derived from the newest timestamp observed during size traversal; a process can regenerate data immediately afterward.
+- Multi-root target-free planning uses the first root's filesystem.
+- `--allow-tracked` can delete committed files; Git may restore them, but uncommitted changes inside the candidate may be lost.
 
-Use `scan` and review HTML or JSON evidence before running cleanup in automation.
+Use `scan`, review HTML/JSON evidence, and rerun the scan plus `df` after cleanup.
