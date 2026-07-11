@@ -154,3 +154,40 @@ fn manpage_should_generate_roff() {
         .success()
         .stdout(predicate::str::contains(".TH devclean"));
 }
+
+#[test]
+fn quarantine_should_list_and_restore_held_candidate() -> Result<()> {
+    let temporary = tempdir()?;
+    let modules = temporary.path().join("node_modules");
+    fs::create_dir_all(&modules)?;
+    let registry = temporary.path().join("state/quarantine.json");
+
+    cargo_bin_cmd!("devclean")
+        .arg("clean")
+        .arg("--yes")
+        .args(["--quarantine-for", "7d", "--quarantine-registry"])
+        .arg(&registry)
+        .arg(temporary.path())
+        .assert()
+        .success();
+
+    let output = cargo_bin_cmd!("devclean")
+        .args(["quarantine", "list", "--json", "--registry"])
+        .arg(&registry)
+        .output()?;
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)?;
+    let id = entries
+        .first()
+        .and_then(|entry| entry.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("quarantine id missing"))?;
+
+    cargo_bin_cmd!("devclean")
+        .args(["quarantine", "restore", id, "--registry"])
+        .arg(&registry)
+        .assert()
+        .success();
+
+    assert!(modules.is_dir());
+    Ok(())
+}

@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use serde_json::json;
 
-use crate::model::{Candidate, OutputFormat, RenderOptions, ScanReport};
+use crate::model::{OutputFormat, RenderOptions, ScanReport};
 use crate::scanner::totals_by_category;
 
 /// Renders a scan report without path redaction.
@@ -73,7 +73,17 @@ fn render_table(report: &ScanReport) -> String {
             "{:<23} {:>12} {:>10}  {}",
             candidate.category,
             human_bytes(candidate.bytes),
-            human_age(candidate),
+            human_age(candidate.modified_at_unix),
+            candidate.path.display()
+        );
+    }
+    for candidate in &report.review_candidates {
+        let _ = writeln!(
+            output,
+            "{:<23} {:>12} {:>10}  {}",
+            "review-only",
+            human_bytes(candidate.bytes),
+            human_age(candidate.modified_at_unix),
             candidate.path.display()
         );
     }
@@ -84,6 +94,14 @@ fn render_table(report: &ScanReport) -> String {
         report.candidates.len(),
         human_bytes(report.total_bytes)
     );
+    if !report.review_candidates.is_empty() {
+        let _ = writeln!(
+            output,
+            "{} review-only observations, {} watched",
+            report.review_candidates.len(),
+            human_bytes(report.review_total_bytes)
+        );
+    }
     for warning in &report.warnings {
         let _ = writeln!(output, "warning: {warning}");
     }
@@ -99,6 +117,13 @@ fn render_jsonl(report: &ScanReport) -> Result<String> {
             serde_json::to_string(&json!({"type": "candidate", "candidate": candidate}))?
         )?;
     }
+    for candidate in &report.review_candidates {
+        writeln!(
+            output,
+            "{}",
+            serde_json::to_string(&json!({"type": "review_candidate", "candidate": candidate}))?
+        )?;
+    }
     writeln!(
         output,
         "{}",
@@ -106,6 +131,8 @@ fn render_jsonl(report: &ScanReport) -> Result<String> {
             "type": "summary",
             "candidate_count": report.candidates.len(),
             "total_bytes": report.total_bytes,
+            "review_candidate_count": report.review_candidates.len(),
+            "review_total_bytes": report.review_total_bytes,
             "warnings": report.warnings,
         }))?
     )?;
@@ -132,7 +159,17 @@ fn render_html(report: &ScanReport) -> String {
             escape_html(&candidate.category.to_string()),
             escape_html(&candidate.path.to_string_lossy()),
             human_bytes(candidate.bytes),
-            human_age(candidate),
+            human_age(candidate.modified_at_unix),
+            escape_html(&candidate.reason)
+        );
+    }
+    for candidate in &report.review_candidates {
+        let _ = write!(
+            rows,
+            "<tr><td>review-only</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            escape_html(&candidate.path.to_string_lossy()),
+            human_bytes(candidate.bytes),
+            human_age(candidate.modified_at_unix),
             escape_html(&candidate.reason)
         );
     }
@@ -143,9 +180,11 @@ fn render_html(report: &ScanReport) -> String {
     }
     format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>devclean scan report</title><style>
-:root{{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui;background:#08111f;color:#ecf3ff}}body{{margin:0}}main{{max-width:1180px;margin:auto;padding:48px 24px}}h1{{font-size:42px;margin-bottom:8px}}.lead{{color:#aebdd2}}.summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:28px 0}}article{{background:#111d31;border:1px solid #263854;border-radius:14px;padding:16px}}article span{{display:block;color:#94a7c2;font-size:12px}}article strong{{font-size:22px}}.total{{color:#5fe0a5}}.table{{overflow:auto;border:1px solid #263854;border-radius:14px}}table{{width:100%;border-collapse:collapse;min-width:900px}}th,td{{padding:12px;text-align:left;border-bottom:1px solid #263854}}th{{background:#15233a;color:#cbd9ed}}td{{color:#b7c5da}}code{{color:#dbe9ff}}.warnings{{color:#ffcf72}}</style></head><body><main><h1>devclean scan</h1><p class="lead">Read-only inventory of rebuildable development artifacts.</p><p class="total"><strong>{}</strong> across {} candidates</p><section class="summary">{}</section><div class="table"><table><thead><tr><th>Category</th><th>Path</th><th>Size</th><th>Age</th><th>Evidence</th></tr></thead><tbody>{}</tbody></table></div><section class="warnings"><h2>Warnings</h2><ul>{}</ul></section></main></body></html>"#,
+  :root{{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui;background:#08111f;color:#ecf3ff}}body{{margin:0}}main{{max-width:1180px;margin:auto;padding:48px 24px}}h1{{font-size:42px;margin-bottom:8px}}.lead{{color:#aebdd2}}.summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:28px 0}}article{{background:#111d31;border:1px solid #263854;border-radius:14px;padding:16px}}article span{{display:block;color:#94a7c2;font-size:12px}}article strong{{font-size:22px}}.total{{color:#5fe0a5}}.review{{color:#ffcf72}}.table{{overflow:auto;border:1px solid #263854;border-radius:14px}}table{{width:100%;border-collapse:collapse;min-width:900px}}th,td{{padding:12px;text-align:left;border-bottom:1px solid #263854}}th{{background:#15233a;color:#cbd9ed}}td{{color:#b7c5da}}code{{color:#dbe9ff}}.warnings{{color:#ffcf72}}</style></head><body><main><h1>devclean scan</h1><p class="lead">Read-only inventory of rebuildable development artifacts.</p><p class="total"><strong>{}</strong> across {} safe candidates</p><p class="review"><strong>{}</strong> across {} review-only observations</p><section class="summary">{}</section><div class="table"><table><thead><tr><th>Category</th><th>Path</th><th>Size</th><th>Age</th><th>Evidence</th></tr></thead><tbody>{}</tbody></table></div><section class="warnings"><h2>Warnings</h2><ul>{}</ul></section></main></body></html>"#,
         human_bytes(report.total_bytes),
         report.candidates.len(),
+        human_bytes(report.review_total_bytes),
+        report.review_candidates.len(),
         cards,
         rows,
         warnings
@@ -156,6 +195,12 @@ fn redact_report(report: &ScanReport) -> ScanReport {
     let mut redacted = report.clone();
     for candidate in &mut redacted.candidates {
         candidate.path = redact_path(&candidate.path, &report.roots);
+    }
+    for candidate in &mut redacted.review_candidates {
+        candidate.path = redact_path(&candidate.path, &report.roots);
+    }
+    for observation in &mut redacted.learning_observations {
+        observation.path = redact_path(&observation.path, &report.roots);
     }
     redacted.roots = report
         .roots
@@ -198,8 +243,8 @@ fn redact_path(path: &Path, roots: &[PathBuf]) -> PathBuf {
     PathBuf::from("<external>").join(path.file_name().unwrap_or_default())
 }
 
-fn human_age(candidate: &Candidate) -> String {
-    let Some(modified) = candidate.modified_at_unix else {
+fn human_age(modified_at_unix: Option<u64>) -> String {
+    let Some(modified) = modified_at_unix else {
         return "unknown".to_owned();
     };
     let now = SystemTime::now()
@@ -229,7 +274,7 @@ fn escape_html(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Category, ScanReport};
+    use crate::model::{Candidate, Category, Confidence, ScanReport};
 
     fn report(path: &str) -> ScanReport {
         ScanReport {
@@ -240,9 +285,14 @@ mod tests {
                 bytes: 1024,
                 reason: "test".to_owned(),
                 modified_at_unix: None,
+                confidence: Confidence::Safe,
             }],
+            review_candidates: Vec::new(),
+            learning_observations: Vec::new(),
             warnings: Vec::new(),
             total_bytes: 1024,
+            review_total_bytes: 0,
+            observed_total_bytes: 0,
             protect_git_tracked: true,
         }
     }

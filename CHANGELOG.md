@@ -4,6 +4,28 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-11
+
+### Added
+
+- Learning Mode observations for active known artifacts and large unknown cache-like project directories.
+- Thirty-day local growth history, recreation detection, and per-path `always-clean` / `never-clean` feedback.
+- Restorable cleanup safety holds with list, restore, expiry purge, and a locked private registry.
+- Six-hour background observation cycle in the native macOS menu bar app.
+- Structured rotating local diagnostics plus a protocol-based, consent-gated Sentry provider.
+- Privacy and observability contracts documenting local state, remote data boundaries, and event schemas.
+
+### Security
+
+- Review-only observations are structurally separate from cleanable candidates and cannot grant deletion authority.
+- Learning/log registry files use mode 0600; quarantine restore and purge reject non-adjacent or symlink paths.
+- Remote diagnostics default off, require both DSN and explicit consent, disable default PII, and never receive raw paths or project names from product events.
+
+### Changed
+
+- The menu bar app scans at launch and every six hours rather than waiting for the popover to open.
+- Learning measurements ignore cleanup age/category filters while cleanup eligibility remains unchanged.
+
 ## [0.3.1] - 2026-07-11
 
 ### Security
@@ -56,7 +78,8 @@ All notable changes to this project are documented here following [Keep a Change
 - Conservative and comprehensive cleanup profiles.
 - Evidence-based artifact detection, global cache cleanup, Docker cleanup, and companion Codex skill.
 
-[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/tuanle96/devclean/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/tuanle96/devclean/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tuanle96/devclean/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tuanle96/devclean/compare/v0.1.0...v0.2.0

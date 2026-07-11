@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow, bail};
 use directories::BaseDirs;
@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::model::{Candidate, Category, ScanReport};
 use crate::policy::contains_git_tracked_files;
+use crate::quarantine::{QuarantineEntry, hold};
 use crate::scanner::{classify, expensive_global_cache_paths, global_cache_paths};
 
 static QUARANTINE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -18,16 +19,36 @@ static QUARANTINE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub struct CleanReport {
     /// Candidates removed successfully.
     pub removed: Vec<Candidate>,
+    /// Candidates moved into persistent safety holds instead of being deleted.
+    pub quarantined: Vec<QuarantineEntry>,
     /// Candidate-specific failures. Cleanup continues after a failure.
     pub failures: Vec<String>,
     /// Scan-time allocated bytes represented by successful removals.
     pub removed_bytes: u64,
+    /// Bytes retained on disk until their safety holds are purged.
+    pub quarantined_bytes: u64,
+}
+
+/// Controls whether validated candidates are deleted immediately or held for restoration.
+#[derive(Debug, Clone, Default)]
+pub struct CleanOptions {
+    /// Retain candidates for this duration. `None` preserves immediate cleanup behavior.
+    pub quarantine_for: Option<Duration>,
+    /// Override the platform quarantine registry, primarily for isolated automation.
+    pub quarantine_registry: Option<PathBuf>,
 }
 
 /// Removes only candidates that still satisfy the scan-time safety policy.
 #[must_use]
 pub fn clean(scan_report: &ScanReport) -> CleanReport {
+    clean_with_options(scan_report, &CleanOptions::default())
+}
+
+/// Processes validated candidates using explicit retention options.
+#[must_use]
+pub fn clean_with_options(scan_report: &ScanReport, options: &CleanOptions) -> CleanReport {
     let mut removed = Vec::new();
+    let mut quarantined = Vec::new();
     let mut failures = Vec::new();
     let allowed_global = BaseDirs::new().map_or_else(Vec::new, |base| {
         let mut paths = global_cache_paths(base.home_dir());
@@ -45,17 +66,33 @@ pub fn clean(scan_report: &ScanReport) -> CleanReport {
             failures.push(format!("{}: {error}", candidate.path.display()));
             continue;
         }
-        match quarantine_and_remove(&candidate.path) {
-            Ok(()) => removed.push(candidate.clone()),
-            Err(error) => failures.push(format!("{}: {error:#}", candidate.path.display())),
+        if let Some(retention) = options.quarantine_for {
+            match hold(
+                &candidate.path,
+                candidate.category,
+                candidate.bytes,
+                retention,
+                options.quarantine_registry.as_deref(),
+            ) {
+                Ok(entry) => quarantined.push(entry),
+                Err(error) => failures.push(format!("{}: {error:#}", candidate.path.display())),
+            }
+        } else {
+            match quarantine_and_remove(&candidate.path) {
+                Ok(()) => removed.push(candidate.clone()),
+                Err(error) => failures.push(format!("{}: {error:#}", candidate.path.display())),
+            }
         }
     }
 
     let removed_bytes = removed.iter().map(|candidate| candidate.bytes).sum();
+    let quarantined_bytes = quarantined.iter().map(|entry| entry.bytes).sum();
     CleanReport {
         removed,
+        quarantined,
         failures,
         removed_bytes,
+        quarantined_bytes,
     }
 }
 
@@ -143,7 +180,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::scanner::{ScanOptions, scan};
+    use crate::scanner::{LearningMode, ScanOptions, scan};
 
     fn options(root: &Path, category: Category) -> ScanOptions {
         ScanOptions {
@@ -156,6 +193,7 @@ mod tests {
             older_than: None,
             min_size: 0,
             protect_git_tracked: false,
+            learning_mode: LearningMode::Disabled,
         }
     }
 

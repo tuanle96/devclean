@@ -9,10 +9,11 @@
 - `policy.rs`: compiled excludes and the Git tracked-file guard.
 - `scanner.rs`: bounded traversal, classification, age/size filtering, platform cache allowlists, and allocated-size measurement.
 - `cleaner.rs`: containment/category/Git revalidation and quarantine-based deletion.
+- `quarantine.rs`: locked, private registry for persistent safety holds, restore, and expiry purge.
 - `docker.rs`: detailed usage, build-cache prune, and volume-preserving system prune.
 - `render.rs`: terminal, JSON, JSONL, redacted, and standalone HTML reports.
 - `main.rs`: CLI orchestration, candidate selection, target-free planning, confirmation, completions, and manpage generation.
-- `apps/macos`: SwiftUI `MenuBarExtra`, user preferences, JSON decoding, and direct process execution of the bundled Rust helper.
+- `apps/macos`: SwiftUI `MenuBarExtra`, six-hour background observations, local learning state, structured diagnostics, opt-in Sentry provider, and direct process execution of the bundled Rust helper.
 
 ## Cleanup lifecycle
 
@@ -26,13 +27,17 @@
   -> user confirmation
   -> containment + category + Git revalidation
   -> atomic same-parent quarantine rename
-  -> recursive quarantine deletion
+    -> recursive quarantine deletion
   -> post-clean verification
 ```
 
 The scan report is not permanent deletion authority. Cleanup repeats live checks. Renaming the final path before recursive deletion narrows the time-of-check/time-of-use window and ensures a path swapped to a symlink is quarantined and rejected rather than followed.
 
+With `--quarantine-for`, the same validated rename becomes a persistent adjacent safety hold recorded in a locked 0600 registry. Holds remain on the same filesystem and therefore do not reclaim space until `quarantine purge`. Restore refuses to overwrite a recreated original path.
+
 The macOS app is an unprivileged presentation client. It parses `scan --format json`, lets the user select candidates, then invokes `clean --only-path ... --yes`. The Rust process repeats discovery and refuses the whole selection if any requested path is stale or no longer eligible. Swift never invokes a shell or performs filesystem deletion.
+
+Learning Mode emits `learning_observations` independently of cleanup age/category filters. Known artifacts receive safe or protected confidence; unknown cache-like directories beneath recognized projects receive review confidence. Only `candidates` can be passed to cleanup. Swift stores at most 30 days/256 snapshots locally and sends only aggregate buckets to monitoring providers.
 
 ## Size and age accounting
 
