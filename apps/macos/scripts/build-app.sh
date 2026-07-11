@@ -42,6 +42,9 @@ mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Helpers"
 cp "$swift_bin_dir/DevcleanMenuBar" "$app_bundle/Contents/MacOS/DevcleanMenuBar"
 cp "$helper" "$app_bundle/Contents/Helpers/devclean"
 cp "$app_dir/Resources/Info.plist" "$app_bundle/Contents/Info.plist"
+if [[ -n "${SENTRY_DSN:-}" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :DevcleanSentryDSN $SENTRY_DSN" "$app_bundle/Contents/Info.plist"
+fi
 chmod 755 "$app_bundle/Contents/MacOS/DevcleanMenuBar" "$app_bundle/Contents/Helpers/devclean"
 
 xattr -cr "$app_bundle"

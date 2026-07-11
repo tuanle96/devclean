@@ -15,12 +15,15 @@
 | Mounted storage is traversed | Stay on the starting filesystem |
 | Hard links inflate estimates | Deduplicate Unix device/inode pairs |
 | Generic output is a deliverable | Keep ambiguous `dist`, `out`, and `coverage` unclassified |
+| Learning heuristic promotes ambiguous data | Review observations are a distinct type and cannot enter cleanup selection |
 | Sensitive path differs only by case | Protect backup/database/volume names case-insensitively |
 | Docker cleanup destroys persistent state | Never invoke prune with `--volumes`; default Docker mode is build cache only |
 | Global cache rule expands unexpectedly | Exact, platform-aware allowlists; expensive model/runtime caches are separate |
 | Shared report leaks workstation paths | `--redact-paths` replaces roots/home with placeholders |
 | GUI selection becomes stale | `--only-path` requires every selected path to appear in a fresh Rust scan or aborts before deletion |
 | GUI command injection | Swift launches the bundled helper directly with an argument array; no shell is involved |
+| Persistent hold registry is tampered with | Purge/restore require an exact same-parent `.devclean-quarantine-*` directory and reject symlinks |
+| Telemetry leaks workstation identity | Remote sharing is opt-in, `sendDefaultPii` is false, paths/project names are excluded, screenshots/view hierarchy are unavailable on macOS |
 
 ## Deliberate escape hatches
 
@@ -29,7 +32,7 @@
 - `--expensive-caches` includes model and runtime downloads.
 - `--docker-system` removes stopped containers and unused images/networks in addition to build cache.
 
-The macOS app exposes none of these escape hatches. Its default categories are Rust targets, `node_modules`, and framework caches, filtered to artifacts older than 7 days and at least 100 MiB.
+The macOS app exposes none of these escape hatches. Its cleanup candidates remain filtered to artifacts older than 7 days and at least 100 MiB. Learning observations ignore the age filter so active growth is visible, but they do not grant cleanup authority.
 
 Treat these as explicit policy changes, not convenience defaults.
 
@@ -40,5 +43,6 @@ Treat these as explicit policy changes, not convenience defaults.
 - Directory modification time is derived from the newest timestamp observed during size traversal; a process can regenerate data immediately afterward.
 - Multi-root target-free planning uses the first root's filesystem.
 - `--allow-tracked` can delete committed files; Git may restore them, but uncommitted changes inside the candidate may be lost.
+- Persistent safety holds intentionally continue using disk space until purge. They are a recovery mechanism, not immediate reclamation.
 
 Use `scan`, review HTML/JSON evidence, and rerun the scan plus `df` after cleanup.

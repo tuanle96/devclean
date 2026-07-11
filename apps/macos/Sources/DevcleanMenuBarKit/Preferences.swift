@@ -8,6 +8,9 @@ public enum PreferenceKeys {
     public static let testCaches = "scan.testCaches"
     public static let globalCaches = "scan.globalCaches"
     public static let expensiveCaches = "scan.expensiveCaches"
+    public static let learningMode = "learning.enabled"
+    public static let safetyHoldDays = "learning.safetyHoldDays"
+    public static let anonymousDiagnostics = "diagnostics.anonymousSharing"
 }
 
 public extension ScanSettings {
@@ -22,6 +25,12 @@ public extension ScanSettings {
         }
         let includeGlobalCaches = defaults.bool(forKey: PreferenceKeys.globalCaches)
         let includeExpensiveCaches = defaults.bool(forKey: PreferenceKeys.expensiveCaches)
+        let learningMode = defaults.object(forKey: PreferenceKeys.learningMode) == nil
+            ? true
+            : defaults.bool(forKey: PreferenceKeys.learningMode)
+        let configuredHoldDays = defaults.object(forKey: PreferenceKeys.safetyHoldDays) == nil
+            ? 7
+            : defaults.integer(forKey: PreferenceKeys.safetyHoldDays)
         if includeGlobalCaches {
             categories.insert(.globalCache)
         }
@@ -48,7 +57,11 @@ public extension ScanSettings {
             includeGlobalCaches: includeGlobalCaches,
             includeExpensiveCaches: includeExpensiveCaches,
             olderThan: olderThan,
-            minimumSize: minimumSize
+            minimumSize: minimumSize,
+            learningMode: learningMode,
+            quarantineFor: learningMode && configuredHoldDays > 0
+                ? "\(configuredHoldDays)d"
+                : nil
         )
     }
 

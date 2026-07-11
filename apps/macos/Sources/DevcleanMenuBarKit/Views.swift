@@ -10,11 +10,13 @@ public struct MenuContentView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            Divider()
-            content
-            messages
+          VStack(alignment: .leading, spacing: 12) {
+              header
+              learningOverview
+              Divider()
+              content
+              safetyHoldSummary
+              messages
             Divider()
             actions
             footer
@@ -22,22 +24,61 @@ public struct MenuContentView: View {
         .padding(16)
         .frame(width: 380)
         .confirmationDialog(
-            "Clean selected artifacts?",
+              model.usesSafetyHold ? "Hold selected artifacts?" : "Clean selected artifacts?",
             isPresented: $showingConfirmation,
             titleVisibility: .visible
         ) {
             Button(
-                "Clean \(ByteFormatting.string(model.selectedBytes))",
+                  model.usesSafetyHold
+                      ? "Hold \(ByteFormatting.string(model.selectedBytes))"
+                      : "Clean \(ByteFormatting.string(model.selectedBytes))",
                 role: .destructive
             ) {
                 model.cleanSelected()
             }
             Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Rust will scan and validate every selected path again before quarantine and deletion.")
-        }
-        .task { model.initialLoad() }
-    }
+          } message: {
+              Text(
+                  model.usesSafetyHold
+                      ? "Rust validates every path again, then moves it into a restorable safety hold. Disk space is released only after purge."
+                      : "Rust validates every selected path again before atomic quarantine and deletion."
+              )
+          }
+          .task { model.initialLoad() }
+      }
+
+      private var learningOverview: some View {
+          HStack(spacing: 16) {
+              learningMetric(
+                  value: "\(model.learningSummary.observedDays)d",
+                  label: "observed"
+              )
+              learningMetric(
+                  value: growthText,
+                  label: "growth"
+              )
+              learningMetric(
+                  value: "\(model.visibleReviewCandidates.count)",
+                  label: "review"
+              )
+              Spacer()
+              Image(systemName: "brain.head.profile")
+                  .foregroundStyle(.secondary)
+                  .accessibilityLabel("Learning Mode")
+          }
+          .padding(10)
+          .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+      }
+
+      private func learningMetric(value: String, label: String) -> some View {
+          VStack(alignment: .leading, spacing: 1) {
+              Text(value)
+                  .font(.caption.weight(.semibold).monospacedDigit())
+              Text(label)
+                  .font(.caption2)
+                  .foregroundStyle(.secondary)
+          }
+      }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -68,28 +109,45 @@ public struct MenuContentView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, minHeight: 120)
-        } else if let candidates = model.report?.candidates, !candidates.isEmpty {
-            HStack {
-                Text("Candidates")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Button("All") { model.selectAll() }
-                    .buttonStyle(.plain)
-                Text("·").foregroundStyle(.tertiary)
-                Button("None") { model.selectNone() }
-                    .buttonStyle(.plain)
-            }
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(candidates) { candidate in
-                        candidateRow(candidate)
-                        if candidate.id != candidates.last?.id {
-                            Divider().padding(.leading, 30)
-                        }
-                    }
-                }
-            }
-            .frame(maxHeight: 260)
+          } else if let report = model.report,
+                    !report.candidates.isEmpty || !model.visibleReviewCandidates.isEmpty
+          {
+              ScrollView {
+                  LazyVStack(alignment: .leading, spacing: 0) {
+                      if !report.candidates.isEmpty {
+                          HStack {
+                              Text("Safe candidates")
+                                  .font(.subheadline.weight(.semibold))
+                              Spacer()
+                              Button("All") { model.selectAll() }
+                                  .buttonStyle(.plain)
+                              Text("·").foregroundStyle(.tertiary)
+                              Button("None") { model.selectNone() }
+                                  .buttonStyle(.plain)
+                          }
+                          .padding(.bottom, 4)
+                      }
+                      ForEach(report.candidates) { candidate in
+                          candidateRow(candidate)
+                          if candidate.id != report.candidates.last?.id {
+                              Divider().padding(.leading, 30)
+                          }
+                      }
+                      if !model.visibleReviewCandidates.isEmpty {
+                          Text("Learning Mode · review only")
+                              .font(.subheadline.weight(.semibold))
+                              .padding(.top, report.candidates.isEmpty ? 0 : 12)
+                              .padding(.bottom, 4)
+                          ForEach(model.visibleReviewCandidates) { candidate in
+                              reviewCandidateRow(candidate)
+                              if candidate.id != model.visibleReviewCandidates.last?.id {
+                                  Divider().padding(.leading, 30)
+                              }
+                          }
+                      }
+                  }
+              }
+              .frame(height: candidateListHeight)
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "checkmark.circle")
@@ -138,10 +196,63 @@ public struct MenuContentView: View {
             }
             .frame(minHeight: 44)
         }
-        .toggleStyle(.checkbox)
+          .toggleStyle(.checkbox)
+          .contextMenu {
+              Button("Always select this safe artifact") {
+                  model.recordFeedback(.alwaysClean, path: candidate.path)
+              }
+              Button("Never clean this path") {
+                  model.recordFeedback(.neverClean, path: candidate.path)
+              }
+          }
         .accessibilityLabel("\(candidate.category.title), \(ByteFormatting.string(candidate.bytes))")
         .accessibilityHint(candidate.path)
-    }
+      }
+
+      private func reviewCandidateRow(_ candidate: ReviewCandidate) -> some View {
+          HStack(spacing: 10) {
+              Image(systemName: "magnifyingglass")
+                  .frame(width: 18)
+                  .foregroundStyle(.orange)
+                  .accessibilityHidden(true)
+              VStack(alignment: .leading, spacing: 2) {
+                  HStack {
+                      Text("Needs review")
+                          .font(.subheadline)
+                      Spacer()
+                      Text(ByteFormatting.string(candidate.bytes))
+                          .font(.caption.monospacedDigit())
+                          .foregroundStyle(.secondary)
+                  }
+                  Text(candidate.path)
+                      .font(.caption)
+                      .foregroundStyle(.secondary)
+                      .lineLimit(1)
+                      .truncationMode(.middle)
+                      .help("\(candidate.path)\n\(candidate.reason)")
+              }
+          }
+          .frame(minHeight: 44)
+          .contextMenu {
+              Button("Ignore this path") {
+                  model.recordFeedback(.neverClean, path: candidate.path)
+              }
+          }
+          .accessibilityLabel("Review only, \(ByteFormatting.string(candidate.bytes))")
+          .accessibilityHint(candidate.reason)
+      }
+
+      @ViewBuilder
+      private var safetyHoldSummary: some View {
+          if !model.quarantineEntries.isEmpty {
+              Label(
+                  "\(model.quarantineEntries.count) safety holds retain \(ByteFormatting.string(model.safetyHoldBytes)) until purge",
+                  systemImage: "clock.arrow.circlepath"
+              )
+              .font(.caption)
+              .foregroundStyle(.orange)
+          }
+      }
 
     @ViewBuilder
     private var messages: some View {
@@ -182,7 +293,10 @@ public struct MenuContentView: View {
             Button {
                 showingConfirmation = true
             } label: {
-                Label("Clean Selected", systemImage: "trash")
+                  Label(
+                      model.usesSafetyHold ? "Hold Selected" : "Clean Selected",
+                      systemImage: model.usesSafetyHold ? "archivebox" : "trash"
+                  )
             }
             .buttonStyle(.borderedProminent)
             .tint(.red)
@@ -214,22 +328,42 @@ public struct MenuContentView: View {
         .font(.caption)
     }
 
-    private var freeSpaceText: String {
+      private var freeSpaceText: String {
         guard let bytes = model.availableBytes else { return "Free space unavailable" }
         return "\(ByteFormatting.string(bytes)) free"
-    }
-}
+      }
 
-public struct SettingsView: View {
+      private var growthText: String {
+          let growth = model.learningSummary.growthBytes
+          let prefix = growth < 0 ? "−" : "+"
+          return prefix + ByteFormatting.string(growth.magnitude)
+      }
+
+      private var candidateListHeight: CGFloat {
+          let rowCount = (model.report?.candidates.count ?? 0)
+              + model.visibleReviewCandidates.count
+          let sectionCount = (model.report?.candidates.isEmpty == false ? 1 : 0)
+              + (model.visibleReviewCandidates.isEmpty ? 0 : 1)
+          return min(300, max(90, CGFloat(rowCount * 46 + sectionCount * 30)))
+      }
+  }
+
+  public struct SettingsView: View {
+      @ObservedObject private var model: AppModel
     @AppStorage(PreferenceKeys.roots) private var roots = ""
     @AppStorage(PreferenceKeys.olderThan) private var olderThan = "7d"
     @AppStorage(PreferenceKeys.minimumSize) private var minimumSize = "100MiB"
     @AppStorage(PreferenceKeys.buildOutputs) private var buildOutputs = false
     @AppStorage(PreferenceKeys.testCaches) private var testCaches = false
     @AppStorage(PreferenceKeys.globalCaches) private var globalCaches = false
-    @AppStorage(PreferenceKeys.expensiveCaches) private var expensiveCaches = false
+      @AppStorage(PreferenceKeys.expensiveCaches) private var expensiveCaches = false
+      @AppStorage(PreferenceKeys.learningMode) private var learningMode = true
+      @AppStorage(PreferenceKeys.safetyHoldDays) private var safetyHoldDays = 7
+      @AppStorage(PreferenceKeys.anonymousDiagnostics) private var anonymousDiagnostics = false
 
-    public init() {}
+      public init(model: AppModel) {
+          self.model = model
+      }
 
     public var body: some View {
         Form {
@@ -259,7 +393,7 @@ public struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Additional categories") {
+              Section("Additional categories") {
                 Toggle("Build outputs", isOn: $buildOutputs)
                 Toggle("Test caches", isOn: $testCaches)
                 Toggle("Package and tool caches", isOn: $globalCaches)
@@ -267,7 +401,75 @@ public struct SettingsView: View {
                 Text("Runtime and model caches can be expensive to download again.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
+              }
+
+              Section("Learning Mode") {
+                  Toggle("Observe artifact growth locally", isOn: $learningMode)
+                  Stepper(
+                      "Safety hold: \(safetyHoldDays == 0 ? "off" : "\(safetyHoldDays) days")",
+                      value: $safetyHoldDays,
+                      in: 0...30
+                  )
+                  Text("A safety hold is restorable but still uses disk space until it is purged. Review-only observations are never cleanable automatically.")
+                      .font(.caption)
+                      .foregroundStyle(.secondary)
+                  Button("Reset local learning history") {
+                      model.resetLearningData()
+                  }
+              }
+
+              Section("Safety holds") {
+                  if model.quarantineEntries.isEmpty {
+                      Text("No restorable holds.")
+                          .foregroundStyle(.secondary)
+                  } else {
+                      ForEach(model.quarantineEntries.prefix(5)) { entry in
+                          HStack {
+                              VStack(alignment: .leading) {
+                                  Text(entry.originalPath)
+                                      .lineLimit(1)
+                                      .truncationMode(.middle)
+                                  Text(ByteFormatting.string(entry.bytes))
+                                      .font(.caption)
+                                      .foregroundStyle(.secondary)
+                              }
+                              Spacer()
+                              Button("Restore") {
+                                  model.restoreSafetyHold(entry)
+                              }
+                              .disabled(model.isBusy)
+                          }
+                      }
+                  }
+                  Button("Purge expired holds") {
+                      model.purgeExpiredSafetyHolds()
+                  }
+                  .disabled(model.isBusy)
+              }
+
+              Section("Diagnostics") {
+                  Toggle(
+                      "Share anonymous errors with Sentry",
+                      isOn: Binding(
+                          get: { anonymousDiagnostics },
+                          set: { value in
+                              anonymousDiagnostics = value
+                              model.setRemoteDiagnosticsConsent(value)
+                          }
+                      )
+                  )
+                  .disabled(!model.isRemoteMonitoringConfigured)
+                  Text(
+                      model.isRemoteMonitoringConfigured
+                          ? "Opt-in. Remote events contain error fingerprints and aggregate buckets only—never paths, usernames, or project names."
+                          : "Sentry provider is built in but no DSN is configured. Local structured logs remain active."
+                  )
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  Button("Open local logs") {
+                      model.openLocalLogs()
+                  }
+              }
 
             Section("Safety") {
                 Label("Git-tracked files remain protected", systemImage: "lock.shield")
@@ -276,6 +478,6 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 500, height: 520)
-    }
-}
+          .frame(width: 560, height: 760)
+      }
+  }

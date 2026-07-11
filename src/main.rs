@@ -4,15 +4,17 @@ use std::fs;
 use std::io::{self, IsTerminal, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use devclean::docker;
 use devclean::{
-    Category, Config, OutputFormat, RenderOptions, ScanOptions, ScanReport, clean,
-    config_candidates, default_roots, human_bytes, load_config, parse_age, parse_bytes,
-    render_with_options, scan,
+    Category, CleanOptions, Config, LearningMode, OutputFormat, RenderOptions, ScanOptions,
+    ScanReport, clean_with_options, config_candidates, default_roots, human_bytes, list_quarantine,
+    load_config, parse_age, parse_bytes, purge_expired, render_with_options, restore_quarantine,
+    scan,
 };
 
 #[derive(Debug, Parser)]
@@ -35,6 +37,8 @@ enum Commands {
     Clean(CleanArgs),
     /// Show defaults, safety guarantees, configuration, and tool availability.
     Doctor,
+    /// List, restore, or purge persistent cleanup safety holds.
+    Quarantine(QuarantineArgs),
     /// Generate shell completion scripts.
     Completions(CompletionsArgs),
     /// Generate a roff manual page.
@@ -108,6 +112,16 @@ struct ScanArgs {
     /// Replace absolute paths in reports with root-relative placeholders.
     #[arg(long)]
     redact_paths: bool,
+
+    #[command(flatten)]
+    learning: LearningArgs,
+}
+
+#[derive(Debug, Args)]
+struct LearningArgs {
+    /// Observe large cache-like directories as review-only Learning Mode candidates.
+    #[arg(long)]
+    learning: bool,
 }
 
 #[derive(Debug, Args)]
@@ -128,6 +142,14 @@ struct CleanArgs {
     /// Skip the final DELETE confirmation.
     #[arg(long)]
     yes: bool,
+
+    /// Keep selected artifacts restorable for this duration, for example 7d.
+    #[arg(long, value_name = "DURATION")]
+    quarantine_for: Option<String>,
+
+    /// Override the quarantine registry path.
+    #[arg(long, hide = true)]
+    quarantine_registry: Option<PathBuf>,
 
     #[command(flatten)]
     report: CleanReportArgs,
@@ -192,6 +214,54 @@ struct ManpageArgs {
     output: Option<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+struct QuarantineArgs {
+    #[command(subcommand)]
+    command: QuarantineCommands,
+}
+
+#[derive(Debug, Subcommand)]
+enum QuarantineCommands {
+    /// List restorable safety holds.
+    List(QuarantineListArgs),
+    /// Restore one safety hold to its original path.
+    Restore(QuarantineRestoreArgs),
+    /// Permanently delete expired safety holds.
+    Purge(QuarantinePurgeArgs),
+}
+
+#[derive(Debug, Args)]
+struct QuarantineListArgs {
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+    /// Override the quarantine registry path.
+    #[arg(long, hide = true)]
+    registry: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct QuarantineRestoreArgs {
+    /// Quarantine identifier shown by `quarantine list`.
+    id: String,
+    /// Override the quarantine registry path.
+    #[arg(long, hide = true)]
+    registry: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct QuarantinePurgeArgs {
+    /// Purge all holds, including those that have not expired.
+    #[arg(long)]
+    all: bool,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+    /// Override the quarantine registry path.
+    #[arg(long, hide = true)]
+    registry: Option<PathBuf>,
+}
+
 fn main() -> Result<()> {
     match Cli::parse().command {
         Commands::Scan(arguments) => run_scan(&arguments),
@@ -200,6 +270,7 @@ fn main() -> Result<()> {
             run_doctor();
             Ok(())
         }
+        Commands::Quarantine(arguments) => run_quarantine(&arguments),
         Commands::Completions(arguments) => {
             clap_complete::generate(
                 arguments.shell,
@@ -216,7 +287,12 @@ fn main() -> Result<()> {
 fn run_scan(arguments: &ScanArgs) -> Result<()> {
     let config = load_config(arguments.shared.config.as_deref())?;
     let categories = select_categories(&arguments.shared, arguments.all, false);
-    let report = scan(&scan_options(&arguments.shared, &config, categories)?)?;
+    let report = scan(&scan_options(
+        &arguments.shared,
+        &config,
+        categories,
+        arguments.learning.learning,
+    )?)?;
     write_report(
         &report,
         arguments.format,
@@ -241,7 +317,12 @@ fn run_clean(arguments: &CleanArgs) -> Result<()> {
     if config.clean.expensive_caches {
         categories.insert(Category::ExpensiveGlobalCache);
     }
-    let mut report = scan(&scan_options(&arguments.shared, &config, categories)?)?;
+    let mut report = scan(&scan_options(
+        &arguments.shared,
+        &config,
+        categories,
+        false,
+    )?)?;
     if let Some(target) = arguments.selection.target_free.as_deref() {
         report = limit_to_target_free(report, parse_bytes(target)?)?;
     }
@@ -273,12 +354,28 @@ fn run_clean(arguments: &CleanArgs) -> Result<()> {
     }
     confirm(arguments.yes)?;
 
-    let cleaned = clean(&report);
+    let clean_options = CleanOptions {
+        quarantine_for: arguments
+            .quarantine_for
+            .as_deref()
+            .map(parse_age)
+            .transpose()?,
+        quarantine_registry: arguments.quarantine_registry.clone(),
+    };
+    let cleaned = clean_with_options(&report, &clean_options);
     for candidate in &cleaned.removed {
         println!(
             "removed {:>10}  {}",
             human_bytes(candidate.bytes),
             candidate.path.display()
+        );
+    }
+    for entry in &cleaned.quarantined {
+        println!(
+            "held    {:>10}  {}  until {}",
+            human_bytes(entry.bytes),
+            entry.original_path.display(),
+            entry.expires_at_unix
         );
     }
     if arguments.docker.docker {
@@ -297,6 +394,13 @@ fn run_clean(arguments: &CleanArgs) -> Result<()> {
         cleaned.removed.len(),
         human_bytes(cleaned.removed_bytes)
     );
+    if !cleaned.quarantined.is_empty() {
+        println!(
+            "held {} candidates, {} retained on disk until purge",
+            cleaned.quarantined.len(),
+            human_bytes(cleaned.quarantined_bytes)
+        );
+    }
     if !cleaned.failures.is_empty() {
         for failure in &cleaned.failures {
             eprintln!("failed: {failure}");
@@ -304,6 +408,62 @@ fn run_clean(arguments: &CleanArgs) -> Result<()> {
         bail!("{} candidates could not be removed", cleaned.failures.len());
     }
     Ok(())
+}
+
+fn run_quarantine(arguments: &QuarantineArgs) -> Result<()> {
+    match &arguments.command {
+        QuarantineCommands::List(arguments) => {
+            let entries = list_quarantine(arguments.registry.as_deref())?;
+            if arguments.json {
+                println!("{}", serde_json::to_string_pretty(&entries)?);
+            } else if entries.is_empty() {
+                println!("no safety holds");
+            } else {
+                println!("ID\tEXPIRES\tSIZE\tORIGINAL PATH");
+                for entry in entries {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        entry.id,
+                        entry.expires_at_unix,
+                        human_bytes(entry.bytes),
+                        entry.original_path.display()
+                    );
+                }
+            }
+            Ok(())
+        }
+        QuarantineCommands::Restore(arguments) => {
+            let entry = restore_quarantine(&arguments.id, arguments.registry.as_deref())?;
+            println!("restored {}", entry.original_path.display());
+            Ok(())
+        }
+        QuarantineCommands::Purge(arguments) => {
+            let now = if arguments.all {
+                u64::MAX
+            } else {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |duration| duration.as_secs())
+            };
+            let report = purge_expired(now, arguments.registry.as_deref())?;
+            if arguments.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "purged {} safety holds, {} reclaimed",
+                    report.purged.len(),
+                    human_bytes(report.purged_bytes)
+                );
+                for failure in &report.failures {
+                    eprintln!("failed: {failure}");
+                }
+            }
+            if !report.failures.is_empty() {
+                bail!("{} safety holds could not be purged", report.failures.len());
+            }
+            Ok(())
+        }
+    }
 }
 
 fn run_doctor() {
@@ -348,6 +508,7 @@ fn scan_options(
     arguments: &SharedScanArgs,
     config: &Config,
     categories: HashSet<Category>,
+    learning_mode: bool,
 ) -> Result<ScanOptions> {
     let roots = if !arguments.roots.is_empty() {
         arguments
@@ -391,6 +552,11 @@ fn scan_options(
         older_than,
         min_size,
         protect_git_tracked: config.clean.protect_git_tracked && !arguments.allow_tracked,
+        learning_mode: if learning_mode {
+            LearningMode::Enabled
+        } else {
+            LearningMode::Disabled
+        },
     })
 }
 
@@ -630,8 +796,12 @@ mod tests {
         let report = ScanReport {
             roots: vec![PathBuf::from("/tmp/project")],
             candidates: Vec::new(),
+            review_candidates: Vec::new(),
+            learning_observations: Vec::new(),
             warnings: Vec::new(),
             total_bytes: 0,
+            review_total_bytes: 0,
+            observed_total_bytes: 0,
             protect_git_tracked: true,
         };
 

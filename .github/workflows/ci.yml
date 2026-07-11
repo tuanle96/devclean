@@ -57,7 +57,7 @@ jobs:
       - run: swift test --package-path apps/macos
       - run: apps/macos/scripts/build-app.sh
       - run: test -x dist/Devclean.app/Contents/Helpers/devclean
-      - run: dist/Devclean.app/Contents/Helpers/devclean --version | grep 'devclean 0.3.1'
+      - run: dist/Devclean.app/Contents/Helpers/devclean --version | grep 'devclean 0.4.0'
       - run: codesign --verify --deep --strict --verbose=2 dist/Devclean.app
 
   msrv:

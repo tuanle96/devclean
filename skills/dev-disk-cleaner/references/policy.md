@@ -8,6 +8,7 @@
 | node_modules | Yes | — | Exact dependency directory name |
 | Framework cache | Yes | — | Exact known framework cache name |
 | Build/test output | No | `--all` | Recognized manifest and exact generated name |
+| Learning review observation | Never | No cleanup flag | Cache-like name under recognized project; evidence gathering only |
 | Package/tool cache | No | `--global-caches` | Exact platform-aware allowlist |
 | Model/runtime cache | No | `--expensive-caches` | Separate allowlist and high redownload cost |
 | Docker build cache | No | `--docker` | Builder prune with optional age filter |
@@ -18,6 +19,7 @@
 - Block Git-tracked candidates unless `--allow-tracked` is explicitly authorized.
 - Revalidate category, containment, type, and tracked state immediately before cleanup.
 - Quarantine by same-parent rename before recursive deletion.
+- Persistent holds remain adjacent, registry-backed, and non-reclaiming until purge.
 - Never follow symlinks or cross filesystem boundaries during discovery.
 - Protect VCS, backup, database, filestore, and volume names case-insensitively.
 - Redact paths in reports that may leave the workstation.

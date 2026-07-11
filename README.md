@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-65d6ad.svg)](LICENSE)
 [![MSRV: 1.85](https://img.shields.io/badge/MSRV-1.85-79b8ff.svg)](Cargo.toml)
 
-`devclean` is a safety-first Rust CLI and native SwiftUI macOS menu bar app for auditing and removing rebuildable development artifacts. It reclaims Rust targets, JavaScript dependencies, framework/build/test caches, selected global caches, and unused Docker data while protecting tracked source, backups, databases, symlinks, mounts, and Docker volumes.
+`devclean` is a safety-first Rust CLI and native SwiftUI macOS menu bar app for auditing and removing rebuildable development artifacts. Learning Mode measures local growth, surfaces unknown cache-like directories as review-only observations, and learns per-path feedback without making ambiguous data cleanable. Structured local diagnostics and opt-in, privacy-filtered Sentry monitoring keep failures visible.
 
 ## Safety by construction
 
@@ -17,6 +17,7 @@
 5. Revalidate containment, category, type, and Git state immediately before deletion.
 6. Atomically rename each candidate into a same-filesystem quarantine before recursive removal.
 7. Never pass `--volumes` to Docker cleanup.
+8. Keep Learning Mode observations separate from cleanup authority.
 
 ## Quick start
 
@@ -26,10 +27,18 @@ devclean scan --all --older-than 7d --min-size 500MiB
 
 # Save a privacy-safe HTML audit
 devclean scan --all --global-caches --docker \
-  --redact-paths --format html --output devclean-audit.html
+    --redact-paths --format html --output devclean-audit.html
+
+# Observe active artifacts and unknown cache-like project directories
+devclean scan --learning --format json
 
 # Conservative cleanup: target, node_modules, framework caches
 devclean clean --select --report devclean-before.html
+
+# Keep selected artifacts restorable for seven days (space is released on purge)
+devclean clean --select --quarantine-for 7d
+devclean quarantine list
+devclean quarantine purge
 
 # Reclaim only enough to reach 100 GiB free
 devclean clean --all --target-free 100GiB --yes
@@ -51,12 +60,13 @@ Run `devclean doctor` to inspect roots, config search paths, tools, and active s
 | `node_modules` | Yes | — | Exact dependency-directory name |
 | Framework cache | Yes | — | Known names such as `.next` and `.svelte-kit` |
 | Build/test output | No | `--all` | Recognized manifest plus exact generated name |
+| Ambiguous cache-like output | Never | `--learning` observes only | Project marker plus names such as `dist`, `out`, `.cache`, or `coverage` |
 | Package/tool cache | No | `--global-caches` | Exact platform-aware allowlist |
 | Model/runtime cache | No | `--expensive-caches` | Separate allowlist because redownload cost is high |
 | Docker build cache | No | `--docker` | `docker builder prune`, never volumes |
 | Docker system data | No | `--docker-system` | Stopped containers, unused images/networks/cache; never volumes |
 
-Ambiguous `dist`, `out`, `coverage`, archives, user data, database paths, VCS metadata, and Docker volumes remain out of scope.
+Ambiguous `dist`, `out`, and `coverage` directories can appear as Learning Mode review-only observations but never enter a cleanup plan. Archives, user data, databases, VCS metadata, and Docker volumes remain protected.
 
 ## Filters and selection
 
@@ -67,6 +77,8 @@ Ambiguous `dist`, `out`, `coverage`, archives, user data, database paths, VCS me
 - `--only-path PATH`: clean exact paths emitted by a previous JSON scan; every path must pass a fresh scan or the operation aborts.
 - `--target-free 100GiB`: select only enough largest candidates to reach a free-space target on the first root filesystem.
 - `--allow-tracked`: explicit escape hatch for vendored/generated content committed to Git.
+- `--learning`: measure active known artifacts independently of age filters and surface large unknown cache-like directories as review-only.
+- `--quarantine-for 7d`: retain selected artifacts in adjacent safety holds; this delays disk reclamation until purge.
 
 ## Configuration
 
@@ -96,7 +108,7 @@ devclean scan --format jsonl --redact-paths
 devclean scan --format html --output report.html --redact-paths
 ```
 
-HTML and JSON can contain private absolute paths unless `--redact-paths` is used. JSONL emits one candidate event per line followed by a summary event.
+HTML and JSON can contain private absolute paths unless `--redact-paths` is used. JSONL emits safe candidates, review-only observations, then a summary event.
 
 Generate shell integrations without extra packages:
 
@@ -132,7 +144,7 @@ brew install tuanle96/tap/devclean
 
 ### Native macOS menu bar app
 
-The SwiftUI app displays free space, previews reclaimable artifacts, supports exact per-candidate selection, and asks for destructive confirmation. It bundles the same Rust helper used by the CLI and never deletes files from Swift.
+The SwiftUI app scans at launch and every six hours, displays growth history, separates safe and review-only observations, accepts `Always select` / `Never clean` feedback, manages restorable safety holds, and keeps structured local logs. It bundles the same Rust helper used by the CLI and never deletes files from Swift.
 
 ```bash
 apps/macos/scripts/build-app.sh
@@ -172,7 +184,7 @@ swift test --package-path apps/macos
 apps/macos/scripts/build-app.sh
 ```
 
-See [architecture](docs/ARCHITECTURE.md), [safety model](docs/SAFETY.md), [performance](docs/PERFORMANCE.md), [distribution](docs/DISTRIBUTION.md), and [contributing](CONTRIBUTING.md).
+See [architecture](docs/ARCHITECTURE.md), [safety model](docs/SAFETY.md), [observability](docs/OBSERVABILITY.md), [privacy](PRIVACY.md), [performance](docs/PERFORMANCE.md), [distribution](docs/DISTRIBUTION.md), and [contributing](CONTRIBUTING.md).
 
 ## Community and security
 

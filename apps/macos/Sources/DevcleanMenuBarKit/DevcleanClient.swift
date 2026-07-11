@@ -61,7 +61,11 @@ public struct FoundationCommandExecutor: CommandExecuting {
 
 public enum DevcleanArguments {
     public static func scan(settings: ScanSettings) -> [String] {
-        ["scan"] + shared(settings: settings) + ["--format", "json"]
+        var arguments = ["scan"] + shared(settings: settings)
+        if settings.learningMode {
+            arguments.append("--learning")
+        }
+        return arguments + ["--format", "json"]
     }
 
     public static func clean(paths: [String], settings: ScanSettings) -> [String] {
@@ -69,8 +73,18 @@ public enum DevcleanArguments {
         for path in paths.sorted() {
             arguments += ["--only-path", path]
         }
+        if let quarantineFor = settings.quarantineFor {
+            arguments += ["--quarantine-for", quarantineFor]
+        }
         arguments.append("--yes")
         return arguments
+    }
+
+    public static let listQuarantine = ["quarantine", "list", "--json"]
+    public static let purgeExpiredQuarantine = ["quarantine", "purge", "--json"]
+
+    public static func restoreQuarantine(id: String) -> [String] {
+        ["quarantine", "restore", id]
     }
 
     private static func shared(settings: ScanSettings) -> [String] {
@@ -153,6 +167,34 @@ public actor DevcleanClient {
     public func clean(paths: [String], settings: ScanSettings) async throws -> String {
         let result = try await execute(DevcleanArguments.clean(paths: paths, settings: settings))
         return result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public func listQuarantine() async throws -> [QuarantineEntry] {
+        let result = try await execute(DevcleanArguments.listQuarantine)
+        do {
+            return try JSONDecoder().decode(
+                [QuarantineEntry].self,
+                from: Data(result.standardOutput.utf8)
+            )
+        } catch {
+            throw DevcleanClientError.invalidReport(error.localizedDescription)
+        }
+    }
+
+    public func purgeExpiredQuarantine() async throws -> QuarantinePurgeReport {
+        let result = try await execute(DevcleanArguments.purgeExpiredQuarantine)
+        do {
+            return try JSONDecoder().decode(
+                QuarantinePurgeReport.self,
+                from: Data(result.standardOutput.utf8)
+            )
+        } catch {
+            throw DevcleanClientError.invalidReport(error.localizedDescription)
+        }
+    }
+
+    public func restoreQuarantine(id: String) async throws {
+        _ = try await execute(DevcleanArguments.restoreQuarantine(id: id))
     }
 
     private func execute(_ arguments: [String]) async throws -> CommandResult {

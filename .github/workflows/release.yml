@@ -141,6 +141,7 @@ jobs:
         env:
           UNIVERSAL: "1"
           HELPER_EXECUTABLE: ${{ github.workspace }}/target/universal-apple-darwin/release/devclean
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: apps/macos/scripts/build-app.sh
       - name: Verify universal app
         run: |

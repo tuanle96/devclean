@@ -9,7 +9,9 @@ use anyhow::{Context, Result};
 use directories::BaseDirs;
 use walkdir::WalkDir;
 
-use crate::model::{Candidate, Category, ScanReport};
+use crate::model::{
+    Candidate, Category, Confidence, LearningObservation, ReviewCandidate, ScanReport,
+};
 use crate::policy::{ExcludePolicy, contains_git_tracked_files};
 
 /// Scanner configuration.
@@ -33,6 +35,32 @@ pub struct ScanOptions {
     pub min_size: u64,
     /// Refuse candidates containing Git-tracked files.
     pub protect_git_tracked: bool,
+    /// Observe large cache-like directories without making them cleanable.
+    pub learning_mode: LearningMode,
+}
+
+/// Controls whether the scanner emits local growth observations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LearningMode {
+    /// Return cleanup candidates only.
+    #[default]
+    Disabled,
+    /// Measure active known artifacts and review-only cache-like directories.
+    Enabled,
+}
+
+impl LearningMode {
+    const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+#[derive(Debug, Default)]
+struct ScanAccumulator {
+    candidates: Vec<Candidate>,
+    review_candidates: Vec<ReviewCandidate>,
+    learning_observations: Vec<LearningObservation>,
+    warnings: Vec<String>,
 }
 
 /// Returns useful development roots without scanning the entire home directory.
@@ -62,13 +90,14 @@ pub fn default_roots() -> Vec<PathBuf> {
 /// Returns an error when no valid root exists, a root cannot be normalized, or an exclude glob
 /// is invalid.
 pub fn scan(options: &ScanOptions) -> Result<ScanReport> {
-    let mut candidates = Vec::new();
-    let mut warnings = Vec::new();
+    let mut output = ScanAccumulator::default();
     let mut normalized_roots = Vec::new();
 
     for root in &options.roots {
         if !root.is_dir() {
-            warnings.push(format!("skipped missing root: {}", root.display()));
+            output
+                .warnings
+                .push(format!("skipped missing root: {}", root.display()));
             continue;
         }
         let normalized = root
@@ -82,52 +111,75 @@ pub fn scan(options: &ScanOptions) -> Result<ScanReport> {
 
     let excludes = ExcludePolicy::new(&options.excludes)?;
     for root in &normalized_roots {
-        scan_root(
-            root,
-            &normalized_roots,
-            options,
-            &excludes,
-            &mut candidates,
-            &mut warnings,
-        );
+        scan_root(root, &normalized_roots, options, &excludes, &mut output);
     }
 
     if options.include_global_caches && options.categories.contains(&Category::GlobalCache) {
-        candidates.extend(global_cache_candidates(
+        add_global_cache_candidates(
             Category::GlobalCache,
             global_cache_paths,
             &normalized_roots,
             options,
             &excludes,
-            &mut warnings,
-        ));
+            &mut output,
+        );
     }
     if options.include_expensive_caches
         && options.categories.contains(&Category::ExpensiveGlobalCache)
     {
-        candidates.extend(global_cache_candidates(
+        add_global_cache_candidates(
             Category::ExpensiveGlobalCache,
             expensive_global_cache_paths,
             &normalized_roots,
             options,
             &excludes,
-            &mut warnings,
-        ));
+            &mut output,
+        );
     }
 
-    candidates.sort_by(|left, right| {
+    output.candidates.sort_by(|left, right| {
         right
             .bytes
             .cmp(&left.bytes)
             .then_with(|| left.path.cmp(&right.path))
     });
-    let total_bytes = candidates.iter().map(|candidate| candidate.bytes).sum();
+    let total_bytes = output
+        .candidates
+        .iter()
+        .map(|candidate| candidate.bytes)
+        .fold(0_u64, u64::saturating_add);
+    output.review_candidates.sort_by(|left, right| {
+        right
+            .bytes
+            .cmp(&left.bytes)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let review_total_bytes = output
+        .review_candidates
+        .iter()
+        .map(|candidate| candidate.bytes)
+        .fold(0_u64, u64::saturating_add);
+    output.learning_observations.sort_by(|left, right| {
+        right
+            .bytes
+            .cmp(&left.bytes)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let observed_total_bytes = output
+        .learning_observations
+        .iter()
+        .map(|observation| observation.bytes)
+        .fold(0_u64, u64::saturating_add);
 
     Ok(ScanReport {
         roots: normalized_roots,
-        candidates,
-        warnings,
+        candidates: output.candidates,
+        review_candidates: output.review_candidates,
+        learning_observations: output.learning_observations,
+        warnings: output.warnings,
         total_bytes,
+        review_total_bytes,
+        observed_total_bytes,
         protect_git_tracked: options.protect_git_tracked,
     })
 }
@@ -137,8 +189,7 @@ fn scan_root(
     roots: &[PathBuf],
     options: &ScanOptions,
     excludes: &ExcludePolicy,
-    candidates: &mut Vec<Candidate>,
-    warnings: &mut Vec<String>,
+    output: &mut ScanAccumulator,
 ) {
     let mut walker = WalkDir::new(root)
         .max_depth(options.max_depth)
@@ -150,7 +201,7 @@ fn scan_root(
         let entry = match entry_result {
             Ok(entry) => entry,
             Err(error) => {
-                warnings.push(error.to_string());
+                output.warnings.push(error.to_string());
                 continue;
             }
         };
@@ -164,13 +215,23 @@ fn scan_root(
         }
 
         let Some((category, reason)) = classify(path) else {
+            if options.learning_mode.is_enabled() {
+                if let Some(reason) = classify_review_candidate(path) {
+                    walker.skip_current_dir();
+                    add_review_candidate(path, reason, options, output);
+                }
+            }
             continue;
         };
         walker.skip_current_dir();
-        if !options.categories.contains(&category) {
-            continue;
-        }
-        add_candidate(path, category, reason, options, candidates, warnings);
+        add_candidate(
+            path,
+            category,
+            reason,
+            options.categories.contains(&category),
+            options,
+            output,
+        );
     }
 }
 
@@ -178,24 +239,33 @@ fn add_candidate(
     path: &Path,
     category: Category,
     reason: &'static str,
+    include_cleanup_candidate: bool,
     options: &ScanOptions,
-    candidates: &mut Vec<Candidate>,
-    warnings: &mut Vec<String>,
+    output: &mut ScanAccumulator,
 ) {
     let stats = match artifact_stats(path) {
         Ok(stats) => stats,
         Err(error) => {
-            warnings.push(format!("{}: {error:#}", path.display()));
+            output
+                .warnings
+                .push(format!("{}: {error:#}", path.display()));
             return;
         }
     };
-    if stats.bytes < options.min_size || !is_old_enough(stats.modified, options.older_than) {
-        return;
-    }
     if options.protect_git_tracked {
         match contains_git_tracked_files(path) {
             Ok(true) => {
-                warnings.push(format!(
+                if options.learning_mode.is_enabled() {
+                    output.learning_observations.push(LearningObservation {
+                        path: path.to_path_buf(),
+                        category: Some(category),
+                        bytes: stats.bytes,
+                        reason: "contains Git-tracked files".to_owned(),
+                        modified_at_unix: stats.modified.and_then(system_time_to_unix),
+                        confidence: Confidence::Protected,
+                    });
+                }
+                output.warnings.push(format!(
                     "protected Git-tracked candidate: {}",
                     path.display()
                 ));
@@ -203,7 +273,7 @@ fn add_candidate(
             }
             Ok(false) => {}
             Err(error) => {
-                warnings.push(format!(
+                output.warnings.push(format!(
                     "skipped {} because tracked-file guard failed: {error:#}",
                     path.display()
                 ));
@@ -211,12 +281,91 @@ fn add_candidate(
             }
         }
     }
-    candidates.push(Candidate {
+    if options.learning_mode.is_enabled() {
+        output.learning_observations.push(LearningObservation {
+            path: path.to_path_buf(),
+            category: Some(category),
+            bytes: stats.bytes,
+            reason: reason.to_owned(),
+            modified_at_unix: stats.modified.and_then(system_time_to_unix),
+            confidence: Confidence::Safe,
+        });
+    }
+    if !include_cleanup_candidate
+        || stats.bytes < options.min_size
+        || !is_old_enough(stats.modified, options.older_than)
+    {
+        return;
+    }
+    output.candidates.push(Candidate {
         category,
         path: path.to_path_buf(),
         bytes: stats.bytes,
         reason: reason.to_owned(),
         modified_at_unix: stats.modified.and_then(system_time_to_unix),
+        confidence: Confidence::Safe,
+    });
+}
+
+fn add_review_candidate(
+    path: &Path,
+    reason: &'static str,
+    options: &ScanOptions,
+    output: &mut ScanAccumulator,
+) {
+    let stats = match artifact_stats(path) {
+        Ok(stats) => stats,
+        Err(error) => {
+            output
+                .warnings
+                .push(format!("{}: {error:#}", path.display()));
+            return;
+        }
+    };
+    if stats.bytes < options.min_size {
+        return;
+    }
+    if options.protect_git_tracked {
+        match contains_git_tracked_files(path) {
+            Ok(true) => {
+                output.learning_observations.push(LearningObservation {
+                    path: path.to_path_buf(),
+                    category: None,
+                    bytes: stats.bytes,
+                    reason: "contains Git-tracked files".to_owned(),
+                    modified_at_unix: stats.modified.and_then(system_time_to_unix),
+                    confidence: Confidence::Protected,
+                });
+                output.warnings.push(format!(
+                    "protected Git-tracked learning candidate: {}",
+                    path.display()
+                ));
+                return;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                output.warnings.push(format!(
+                    "skipped learning candidate {} because tracked-file guard failed: {error:#}",
+                    path.display()
+                ));
+                return;
+            }
+        }
+    }
+    output.learning_observations.push(LearningObservation {
+        path: path.to_path_buf(),
+        category: None,
+        bytes: stats.bytes,
+        reason: reason.to_owned(),
+        modified_at_unix: stats.modified.and_then(system_time_to_unix),
+        confidence: Confidence::Review,
+    });
+    output.review_candidates.push(ReviewCandidate {
+        path: path.to_path_buf(),
+        bytes: stats.bytes,
+        reason: reason.to_owned(),
+        modified_at_unix: stats.modified.and_then(system_time_to_unix),
+        confidence: Confidence::Review,
     });
 }
 
@@ -274,9 +423,64 @@ pub fn classify(path: &Path) -> Option<(Category, &'static str)> {
     None
 }
 
+fn classify_review_candidate(path: &Path) -> Option<&'static str> {
+    if is_protected(path) || !has_project_marker(path) {
+        return None;
+    }
+    let name = path.file_name()?;
+    if matches_name(
+        name,
+        &[
+            ".build",
+            ".cache",
+            ".gradle",
+            ".angular",
+            ".expo",
+            "DerivedData",
+            "Pods",
+            "cache",
+            "coverage",
+            "dist",
+            "generated",
+            "out",
+            "temp",
+            "tmp",
+        ],
+    ) {
+        return Some("large cache-like directory beneath a recognized project");
+    }
+    None
+}
+
+fn has_project_marker(path: &Path) -> bool {
+    path.ancestors().skip(1).take(3).any(|ancestor| {
+        [
+            "Cargo.toml",
+            "Package.swift",
+            "package.json",
+            "pyproject.toml",
+            "go.mod",
+            "pubspec.yaml",
+            "build.gradle",
+            "settings.gradle",
+        ]
+        .iter()
+        .any(|marker| ancestor.join(marker).is_file())
+            || ancestor
+                .read_dir()
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .any(|entry| entry.path().extension() == Some(OsStr::new("xcodeproj")))
+    })
+}
+
 fn should_prune(path: &Path) -> bool {
-    path.file_name()
-        .is_some_and(|name| matches_name(name, &[".git", ".hg", ".svn", ".venv", "site-packages"]))
+    path.file_name().is_some_and(|name| {
+        matches_name(name, &[".git", ".hg", ".svn", ".venv", "site-packages"])
+            || name.to_string_lossy().starts_with(".devclean-quarantine-")
+    })
 }
 
 fn looks_like_rust_target(path: &Path) -> bool {
@@ -334,19 +538,20 @@ fn matches_name(name: &OsStr, values: &[&str]) -> bool {
     values.iter().any(|value| name == OsStr::new(value))
 }
 
-fn global_cache_candidates(
+fn add_global_cache_candidates(
     category: Category,
     paths: fn(&Path) -> Vec<PathBuf>,
     roots: &[PathBuf],
     options: &ScanOptions,
     excludes: &ExcludePolicy,
-    warnings: &mut Vec<String>,
-) -> Vec<Candidate> {
+    output: &mut ScanAccumulator,
+) {
     let Some(base) = BaseDirs::new() else {
-        warnings.push("home directory is unavailable; global caches were skipped".to_owned());
-        return Vec::new();
+        output
+            .warnings
+            .push("home directory is unavailable; global caches were skipped".to_owned());
+        return;
     };
-    let mut candidates = Vec::new();
     for path in paths(base.home_dir()) {
         if path.is_dir() && !excludes.matches(&path, roots) {
             add_candidate(
@@ -357,13 +562,12 @@ fn global_cache_candidates(
                 } else {
                     "downloaded development-tool cache"
                 },
+                true,
                 options,
-                &mut candidates,
-                warnings,
+                output,
             );
         }
     }
-    candidates
 }
 
 /// Returns the exact allowlist for package and tool caches that are cheap to restore.
@@ -514,6 +718,7 @@ mod tests {
             older_than: None,
             min_size: 0,
             protect_git_tracked: false,
+            learning_mode: LearningMode::Disabled,
         }
     }
 
@@ -593,6 +798,40 @@ mod tests {
         ))?;
 
         assert!(report.candidates.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn learning_mode_should_observe_unknown_project_cache_as_review_only() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(temporary.path().join("package.json"), "{}")?;
+        let cache = temporary.path().join("dist");
+        fs::create_dir_all(&cache)?;
+        fs::write(cache.join("bundle.js"), "generated")?;
+        let mut options = options(temporary.path(), HashSet::from(Category::all()));
+        options.learning_mode = LearningMode::Enabled;
+
+        let report = scan(&options)?;
+
+        assert!(report.candidates.is_empty());
+        assert_eq!(report.review_candidates.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn learning_mode_should_measure_active_artifact_without_making_it_cleanable() -> Result<()> {
+        let temporary = tempdir()?;
+        let target = temporary.path().join("target/debug");
+        fs::create_dir_all(&target)?;
+        fs::write(target.join("artifact"), "fresh")?;
+        let mut options = options(temporary.path(), HashSet::from([Category::RustTarget]));
+        options.learning_mode = LearningMode::Enabled;
+        options.older_than = Some(Duration::from_secs(86_400));
+
+        let report = scan(&options)?;
+
+        assert!(report.candidates.is_empty());
+        assert_eq!(report.learning_observations.len(), 1);
         Ok(())
     }
 
