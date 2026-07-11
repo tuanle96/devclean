@@ -77,7 +77,9 @@ pub fn contains_git_tracked_files(path: &Path) -> Result<bool> {
     }
     let root_text =
         String::from_utf8(root_output.stdout).context("git returned a non-UTF-8 root")?;
-    let root = PathBuf::from(root_text.trim());
+    let root = PathBuf::from(root_text.trim())
+        .canonicalize()
+        .context("failed to normalize Git root")?;
     let relative = path
         .strip_prefix(&root)
         .with_context(|| format!("{} escaped Git root {}", path.display(), root.display()))?;
