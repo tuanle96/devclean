@@ -28,4 +28,4 @@ apps/macos/scripts/build-app.sh
 open dist/Devclean.app
 ```
 
-Production distribution should set `CODE_SIGN_IDENTITY` to a Developer ID Application certificate and notarize the resulting archive. The app intentionally does not enable App Sandbox because users select development roots across their home directory; macOS privacy protections still apply.
+Production distribution sets `CODE_SIGN_IDENTITY` to a Developer ID Application certificate, enables hardened runtime, notarizes the resulting archive, staples the ticket, and verifies Gatekeeper acceptance. The app intentionally does not enable App Sandbox because users select development roots across their home directory; macOS privacy protections still apply.

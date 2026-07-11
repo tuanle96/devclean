@@ -44,7 +44,19 @@ cp "$helper" "$app_bundle/Contents/Helpers/devclean"
 cp "$app_dir/Resources/Info.plist" "$app_bundle/Contents/Info.plist"
 chmod 755 "$app_bundle/Contents/MacOS/DevcleanMenuBar" "$app_bundle/Contents/Helpers/devclean"
 
-codesign --force --deep --sign "${CODE_SIGN_IDENTITY:--}" "$app_bundle"
+xattr -cr "$app_bundle"
+signing_identity="${CODE_SIGN_IDENTITY:--}"
+signing_args=(--force --sign "$signing_identity")
+if [[ "$signing_identity" != "-" ]]; then
+  signing_args+=(--options runtime --timestamp)
+fi
+if [[ -n "${SIGNING_KEYCHAIN:-}" ]]; then
+  signing_args+=(--keychain "$SIGNING_KEYCHAIN")
+fi
+codesign "${signing_args[@]}" "$app_bundle/Contents/Helpers/devclean"
+codesign "${signing_args[@]}" "$app_bundle"
+xattr -dr com.apple.FinderInfo "$app_bundle" 2>/dev/null || true
+xattr -dr 'com.apple.fileprovider.fpfs#P' "$app_bundle" 2>/dev/null || true
 codesign --verify --deep --strict --verbose=2 "$app_bundle"
 
 echo "$app_bundle"
