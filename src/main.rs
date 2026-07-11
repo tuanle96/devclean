@@ -154,6 +154,14 @@ struct SelectionArgs {
     #[arg(long)]
     select: bool,
 
+    /// Clean only exact candidate paths from a previous JSON scan. May be repeated.
+    #[arg(
+        long = "only-path",
+        value_name = "PATH",
+        conflicts_with_all = ["select", "target_free"]
+    )]
+    only_paths: Vec<PathBuf>,
+
     /// Remove only enough candidates to reach this amount of free space.
     #[arg(long, value_name = "SIZE")]
     target_free: Option<String>,
@@ -236,6 +244,9 @@ fn run_clean(arguments: &CleanArgs) -> Result<()> {
     let mut report = scan(&scan_options(&arguments.shared, &config, categories)?)?;
     if let Some(target) = arguments.selection.target_free.as_deref() {
         report = limit_to_target_free(report, parse_bytes(target)?)?;
+    }
+    if !arguments.selection.only_paths.is_empty() {
+        report = select_exact_candidates(report, &arguments.selection.only_paths)?;
     }
     if arguments.selection.select && !report.candidates.is_empty() {
         report = select_candidates(report)?;
@@ -470,6 +481,45 @@ fn select_candidates(mut report: ScanReport) -> Result<ScanReport> {
     Ok(report)
 }
 
+fn select_exact_candidates(
+    mut report: ScanReport,
+    requested_paths: &[PathBuf],
+) -> Result<ScanReport> {
+    let requested: HashSet<PathBuf> = requested_paths
+        .iter()
+        .map(|path| path_identity(path))
+        .collect();
+    let found: HashSet<PathBuf> = report
+        .candidates
+        .iter()
+        .map(|candidate| path_identity(&candidate.path))
+        .filter(|path| requested.contains(path))
+        .collect();
+    let mut missing: Vec<_> = requested.difference(&found).collect();
+    missing.sort();
+    if let Some(path) = missing.first() {
+        bail!(
+            "selected path is no longer an eligible cleanup candidate: {}",
+            path.display()
+        );
+    }
+
+    report
+        .candidates
+        .retain(|candidate| requested.contains(&path_identity(&candidate.path)));
+    report.total_bytes = report
+        .candidates
+        .iter()
+        .map(|candidate| candidate.bytes)
+        .sum();
+    Ok(report)
+}
+
+fn path_identity(path: &Path) -> PathBuf {
+    let expanded = expand_root(path);
+    fs::canonicalize(&expanded).unwrap_or(expanded)
+}
+
 fn parse_selection(value: &str, maximum: usize) -> Result<HashSet<usize>> {
     if value.eq_ignore_ascii_case("all") {
         return Ok((1..=maximum).collect());
@@ -573,5 +623,20 @@ mod tests {
     #[test]
     fn parse_selection_should_reject_out_of_range_value() {
         assert!(parse_selection("6", 5).is_err());
+    }
+
+    #[test]
+    fn exact_selection_should_reject_stale_path() {
+        let report = ScanReport {
+            roots: vec![PathBuf::from("/tmp/project")],
+            candidates: Vec::new(),
+            warnings: Vec::new(),
+            total_bytes: 0,
+            protect_git_tracked: true,
+        };
+
+        assert!(
+            select_exact_candidates(report, &[PathBuf::from("/tmp/project/node_modules")]).is_err()
+        );
     }
 }

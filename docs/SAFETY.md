@@ -19,6 +19,8 @@
 | Docker cleanup destroys persistent state | Never invoke prune with `--volumes`; default Docker mode is build cache only |
 | Global cache rule expands unexpectedly | Exact, platform-aware allowlists; expensive model/runtime caches are separate |
 | Shared report leaks workstation paths | `--redact-paths` replaces roots/home with placeholders |
+| GUI selection becomes stale | `--only-path` requires every selected path to appear in a fresh Rust scan or aborts before deletion |
+| GUI command injection | Swift launches the bundled helper directly with an argument array; no shell is involved |
 
 ## Deliberate escape hatches
 
@@ -26,6 +28,8 @@
 - `--allow-tracked` permits deletion of candidates containing Git-tracked files.
 - `--expensive-caches` includes model and runtime downloads.
 - `--docker-system` removes stopped containers and unused images/networks in addition to build cache.
+
+The macOS app exposes none of these escape hatches. Its default categories are Rust targets, `node_modules`, and framework caches, filtered to artifacts older than 7 days and at least 100 MiB.
 
 Treat these as explicit policy changes, not convenience defaults.
 

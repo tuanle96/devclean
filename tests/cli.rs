@@ -53,6 +53,50 @@ fn clean_should_remove_generated_directory_with_yes() -> Result<()> {
 }
 
 #[test]
+fn clean_should_remove_only_exact_selected_path() -> Result<()> {
+    let temporary = tempdir()?;
+    let selected = temporary.path().join("selected/node_modules");
+    let retained = temporary.path().join("retained/node_modules");
+    fs::create_dir_all(&selected)?;
+    fs::create_dir_all(&retained)?;
+
+    cargo_bin_cmd!("devclean")
+        .arg("clean")
+        .arg("--yes")
+        .arg("--only-path")
+        .arg(&selected)
+        .arg(temporary.path())
+        .assert()
+        .success();
+
+    assert!(!selected.exists());
+    assert!(retained.exists());
+    Ok(())
+}
+
+#[test]
+fn clean_should_abort_when_exact_selected_path_is_stale() -> Result<()> {
+    let temporary = tempdir()?;
+    let retained = temporary.path().join("retained/node_modules");
+    fs::create_dir_all(&retained)?;
+
+    cargo_bin_cmd!("devclean")
+        .arg("clean")
+        .arg("--yes")
+        .arg("--only-path")
+        .arg(temporary.path().join("missing/node_modules"))
+        .arg(temporary.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no longer an eligible cleanup candidate",
+        ));
+
+    assert!(retained.exists());
+    Ok(())
+}
+
+#[test]
 fn scan_should_protect_git_tracked_candidate() -> Result<()> {
     let temporary = tempdir()?;
     let modules = temporary.path().join("node_modules");

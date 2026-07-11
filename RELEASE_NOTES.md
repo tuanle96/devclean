@@ -1,24 +1,23 @@
-# devclean v0.2.0
+# devclean v0.3.0
 
-This release turns the initial safety-first cleaner into a configurable, selective, distribution-ready tool.
+This release adds a native SwiftUI macOS menu bar experience without moving any deletion authority out of the Rust safety engine.
 
-## Safety
+## macOS menu bar
 
-- Blocks Git-tracked candidates and repeats the guard immediately before cleanup.
-- Atomically quarantines candidates before recursive deletion.
-- Protects backup, database, and volume paths case-insensitively.
-- Separates large model/runtime caches behind `--expensive-caches`.
-- Makes `--docker` build-cache-only; broader cleanup requires `--docker-system`. Volumes remain untouched.
+- Shows free disk space and estimated reclaimable bytes from the menu bar.
+- Previews and selects exact candidates with native SwiftUI controls.
+- Provides settings for roots, age/size filters, and opt-in cache categories.
+- Bundles a universal Rust helper inside `Devclean.app`.
 
-## Control and automation
+## Safety and automation
 
-- TOML config, exclude globs, age/size filters, target-free planning, and interactive range selection.
-- JSONL and redacted JSON/HTML reports.
-- Platform-aware cache paths, shell completions, and roff manpage generation.
-- Integration/property tests, immutable Action pins, checksums, CycloneDX SBOM, and build/SBOM attestations.
+- Adds repeatable `clean --only-path PATH` selection for machine clients.
+- Performs a fresh Rust scan and aborts before deletion if any selected path is stale.
+- Invokes the helper directly without a shell; GUI never enables tracked-file or Docker-system escape hatches.
+- Adds Swift contract tests, macOS app CI, universal app packaging, checksums, SBOM, and provenance attestations.
 
-## Installation note
+## Installation
 
-The crates.io package is `devclean-cli`; it installs the `devclean` executable.
+The crates.io package remains `devclean-cli`; it installs the `devclean` executable. The menu bar archive contains `Devclean.app` and requires macOS 13 or newer.
 
 Download the archive for your platform, verify `SHA256SUMS`, and run `gh attestation verify <archive> -R tuanle96/devclean`.

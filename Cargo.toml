@@ -1,6 +1,6 @@
 [package]
 name = "devclean-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Audit and safely remove rebuildable development artifacts"
@@ -11,7 +11,7 @@ homepage = "https://github.com/tuanle96/devclean"
 readme = "README.md"
 keywords = ["disk-cleanup", "developer-tools", "cli", "docker", "rust"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = ["fuzz/**", "scripts/benchmark.sh"]
+exclude = ["apps/**", "fuzz/**", "scripts/benchmark.sh"]
 
 [dependencies]
 anyhow = "1.0"

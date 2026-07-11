@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-65d6ad.svg)](LICENSE)
 [![MSRV: 1.85](https://img.shields.io/badge/MSRV-1.85-79b8ff.svg)](Cargo.toml)
 
-`devclean` is a safety-first Rust CLI for auditing and removing rebuildable development artifacts. It reclaims Rust targets, JavaScript dependencies, framework/build/test caches, selected global caches, and unused Docker data while protecting tracked source, backups, databases, symlinks, mounts, and Docker volumes.
+`devclean` is a safety-first Rust CLI and native SwiftUI macOS menu bar app for auditing and removing rebuildable development artifacts. It reclaims Rust targets, JavaScript dependencies, framework/build/test caches, selected global caches, and unused Docker data while protecting tracked source, backups, databases, symlinks, mounts, and Docker volumes.
 
 ## Safety by construction
 
@@ -64,6 +64,7 @@ Ambiguous `dist`, `out`, `coverage`, archives, user data, database paths, VCS me
 - `--min-size 1GiB`: ignore small candidates.
 - `--exclude 'vendor/**'`: skip matching absolute, root-relative, or basename paths.
 - `--select`: choose candidate numbers and ranges interactively.
+- `--only-path PATH`: clean exact paths emitted by a previous JSON scan; every path must pass a fresh scan or the operation aborts.
 - `--target-free 100GiB`: select only enough largest candidates to reach a free-space target on the first root filesystem.
 - `--allow-tracked`: explicit escape hatch for vendored/generated content committed to Git.
 
@@ -129,6 +130,17 @@ cargo install devclean-cli --locked
 brew install tuanle96/tap/devclean
 ```
 
+### Native macOS menu bar app
+
+The SwiftUI app displays free space, previews reclaimable artifacts, supports exact per-candidate selection, and asks for destructive confirmation. It bundles the same Rust helper used by the CLI and never deletes files from Swift.
+
+```bash
+apps/macos/scripts/build-app.sh
+open dist/Devclean.app
+```
+
+The local build is ad-hoc signed. Public frictionless distribution additionally requires a Developer ID Application certificate and Apple notarization. See [`apps/macos`](apps/macos).
+
 ### Build from source
 
 ```bash
@@ -156,6 +168,8 @@ cargo fmt --all -- --check
 cargo test --all-features --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo package --locked
+swift test --package-path apps/macos
+apps/macos/scripts/build-app.sh
 ```
 
 See [architecture](docs/ARCHITECTURE.md), [safety model](docs/SAFETY.md), [performance](docs/PERFORMANCE.md), [distribution](docs/DISTRIBUTION.md), and [contributing](CONTRIBUTING.md).

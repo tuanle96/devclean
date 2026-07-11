@@ -86,9 +86,58 @@ jobs:
           path: ${{ matrix.asset }}.*
           if-no-files-found: error
 
+  macos-app:
+    name: Build macOS menu bar app
+    needs: [verify, build]
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: devclean-macos-*
+          path: cli-artifacts
+      - name: Create universal Rust helper
+        shell: bash
+        run: |
+          mkdir -p cli-arm64 cli-x86_64 target/universal-apple-darwin/release
+          tar -xzf cli-artifacts/devclean-macos-arm64/devclean-macos-arm64.tar.gz -C cli-arm64
+          tar -xzf cli-artifacts/devclean-macos-x86_64/devclean-macos-x86_64.tar.gz -C cli-x86_64
+          lipo -create cli-arm64/devclean cli-x86_64/devclean \
+            -output target/universal-apple-darwin/release/devclean
+          test "$(lipo -archs target/universal-apple-darwin/release/devclean)" = "x86_64 arm64" \
+            -o "$(lipo -archs target/universal-apple-darwin/release/devclean)" = "arm64 x86_64"
+      - name: Test Swift package
+        run: swift test --package-path apps/macos
+      - name: Build universal app
+        env:
+          UNIVERSAL: "1"
+          HELPER_EXECUTABLE: ${{ github.workspace }}/target/universal-apple-darwin/release/devclean
+        run: apps/macos/scripts/build-app.sh
+      - name: Verify universal app
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/Devclean.app
+          lipo -archs dist/Devclean.app/Contents/MacOS/DevcleanMenuBar | grep arm64
+          lipo -archs dist/Devclean.app/Contents/MacOS/DevcleanMenuBar | grep x86_64
+          lipo -archs dist/Devclean.app/Contents/Helpers/devclean | grep arm64
+          lipo -archs dist/Devclean.app/Contents/Helpers/devclean | grep x86_64
+      - name: Package app bundle
+        run: ditto -c -k --sequesterRsrc --keepParent dist/Devclean.app devclean-menubar-macos-universal.zip
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: devclean-menubar-macos-universal.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: devclean-menubar-macos-universal
+          path: devclean-menubar-macos-universal.zip
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
-    needs: build
+    needs: [build, macos-app]
     runs-on: ubuntu-latest
     permissions:
       contents: write
