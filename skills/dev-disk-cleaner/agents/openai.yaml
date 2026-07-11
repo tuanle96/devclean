@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dev Disk Cleaner"
+  short_description: "Audit and safely clean development disk waste"
+  default_prompt: "Use $dev-disk-cleaner to audit development disk usage and safely remove rebuildable artifacts."

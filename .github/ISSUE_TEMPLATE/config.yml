@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Usage questions and ideas
+    url: https://github.com/tuanle96/devclean/discussions
+    about: Ask questions or discuss ideas before opening an issue.
+  - name: Private security report
+    url: https://github.com/tuanle96/devclean/security/advisories/new
+    about: Report vulnerabilities without disclosing them publicly.

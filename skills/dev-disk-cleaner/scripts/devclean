@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+if command -v devclean >/dev/null 2>&1; then
+  exec devclean "$@"
+fi
+
+echo "devclean is not installed; install it with: cargo install --path <devclean-source> --locked" >&2
+exit 127

@@ -1,0 +1,58 @@
+name: Bug report
+description: Report incorrect scanning, cleanup, or CLI behavior
+title: "[Bug]: "
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Redact private paths and never include secrets or database contents.
+  - type: input
+    id: version
+    attributes:
+      label: devclean version
+      placeholder: "devclean 0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: "macOS 15, arm64"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Redacted command
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal disposable reproduction
+      description: Describe a fixture that reproduces the problem without private data.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed secrets, private paths, and sensitive scan output.
+          required: true
+        - label: This is not a confidential vulnerability report.
+          required: true

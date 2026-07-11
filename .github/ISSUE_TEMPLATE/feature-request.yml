@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a new classifier, platform, report, or workflow
+title: "[Feature]: "
+labels: [enhancement, triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What developer-storage problem should devclean solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Classification evidence
+      description: How can devclean distinguish the artifact from valuable lookalikes?
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety boundaries
+      description: What paths or data must always be preserved?
+    validations:
+      required: true
