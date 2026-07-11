@@ -1,0 +1,23 @@
+[package]
+name = "devclean-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.85"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+devclean-cli = { path = ".." }
+
+[[bin]]
+name = "parse_filters"
+path = "fuzz_targets/parse_filters.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

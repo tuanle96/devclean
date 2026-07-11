@@ -2,43 +2,30 @@
 
 ## Category matrix
 
-| Category | Default clean | Comprehensive clean | Evidence |
-|---|---:|---:|---|
-| Rust target | Yes | Yes | Directory is named `target` and contains Cargo build markers |
-| node_modules | Yes | Yes | Exact `node_modules` or `frontend_node_modules` directory |
-| Framework cache | Yes | Yes | Exact known cache name such as `.next` or `.svelte-kit` |
-| Build output | No | Yes | `build` directory under a recognized project manifest |
-| Test cache | No | Yes | Exact mutation, test, lint, or type-checker cache name |
-| Global cache | No | Yes, opt-in | Exact path on the CLI allowlist |
-| Docker image/build cache | No | Opt-in | `docker system prune -af`, never volumes |
+| Category | Default | Explicit opt-in | Evidence |
+|---|:---:|---|---|
+| Rust target | Yes | — | Exact `target` plus Cargo build markers |
+| node_modules | Yes | — | Exact dependency directory name |
+| Framework cache | Yes | — | Exact known framework cache name |
+| Build/test output | No | `--all` | Recognized manifest and exact generated name |
+| Package/tool cache | No | `--global-caches` | Exact platform-aware allowlist |
+| Model/runtime cache | No | `--expensive-caches` | Separate allowlist and high redownload cost |
+| Docker build cache | No | `--docker` | Builder prune with optional age filter |
+| Docker system data | No | `--docker-system` | Stopped containers and unused image/network/cache; never volumes |
 
-## Always protected
+## Invariants
 
-- Docker and container volumes
-- PostgreSQL, MySQL, SQLite, Odoo filestore, and other database data
-- Backup folders and archive files
-- Git, Mercurial, and Subversion metadata
-- Environment and secret files
-- User documents, downloads, media, and messaging data
-- Ambiguous generated-looking paths that lack classification evidence
+- Block Git-tracked candidates unless `--allow-tracked` is explicitly authorized.
+- Revalidate category, containment, type, and tracked state immediately before cleanup.
+- Quarantine by same-parent rename before recursive deletion.
+- Never follow symlinks or cross filesystem boundaries during discovery.
+- Protect VCS, backup, database, filestore, and volume names case-insensitively.
+- Redact paths in reports that may leave the workstation.
 
-## Escalation cases
+## Escalate instead of deleting
 
-Stop and ask for a path-specific decision when:
-
-- a large directory is tracked by Git;
-- a generic `dist`, `out`, `coverage`, or `build` directory may be a deliverable;
-- cleanup would stop a running process;
-- a Docker volume appears unused but may hold a database;
-- a backup or production-data copy is the largest reclaim opportunity;
-- the filesystem cannot provide reliable allocated-size metadata.
+Stop for a path-specific decision when a candidate contains tracked changes, resembles a deliverable, is being regenerated, is a backup or database copy, requires `--allow-tracked`, or lies outside the exact cache allowlist.
 
 ## Regeneration handling
 
-When a deleted artifact reappears:
-
-1. Record its size and modification time.
-2. Inspect working directories and open files with `lsof`.
-3. Sample short-lived processes for Cargo, Rust, Node, Tauri, Vite, and package-manager commands.
-4. Do not kill IDEs, agents, or watchers without user authority.
-5. Retry only after the producer exits or the user authorizes stopping it.
+Record size and modification time, inspect working directories/open files with `ps` and `lsof`, identify Cargo/Node/Tauri/Vite/package-manager producers, and retry only after the producer exits or the user authorizes stopping it.

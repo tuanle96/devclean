@@ -6,86 +6,127 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-65d6ad.svg)](LICENSE)
 [![MSRV: 1.85](https://img.shields.io/badge/MSRV-1.85-79b8ff.svg)](Cargo.toml)
 
-`devclean` is a safety-first Rust CLI for auditing and removing rebuildable development artifacts. It reclaims space from Rust builds, JavaScript dependencies, framework caches, selected package-manager caches, and unused Docker data while protecting source code, backups, databases, and Docker volumes.
+`devclean` is a safety-first Rust CLI for auditing and removing rebuildable development artifacts. It reclaims Rust targets, JavaScript dependencies, framework/build/test caches, selected global caches, and unused Docker data while protecting tracked source, backups, databases, symlinks, mounts, and Docker volumes.
 
-## Why devclean?
+## Safety by construction
 
-Developer machines quietly accumulate tens or hundreds of gigabytes in `target`, `node_modules`, framework build caches, package caches, and container layers. Broad cleanup commands can reclaim that space, but they can also remove databases, backups, or unrelated directories with misleading names.
-
-`devclean` uses an audit-first workflow:
-
-1. Scan and classify candidates using filesystem evidence.
-2. Show an exact cleanup plan and estimated allocated size.
-3. Require confirmation before deletion.
-4. Revalidate every candidate immediately before removal.
-5. Never pass `--volumes` to Docker cleanup.
-
-## Features
-
-- Read-only terminal, JSON, and standalone HTML reports.
-- Conservative and comprehensive cleanup profiles.
-- Rust `target` detection that requires Cargo build markers.
-- Safe handling of symlinks, mount boundaries, hard links, and changed paths.
-- Exact allowlist for global development caches.
-- Optional Docker image, stopped-container, network, and build-cache cleanup.
-- Codex skill for repeatable audit, approval, cleanup, and verification workflows.
-- macOS, Linux, and Windows CI coverage.
+1. Scan read-only and classify candidates using filesystem evidence.
+2. Block candidates containing Git-tracked files by default.
+3. Show an exact, size-sorted cleanup plan.
+4. Require confirmation unless `--yes` is explicit.
+5. Revalidate containment, category, type, and Git state immediately before deletion.
+6. Atomically rename each candidate into a same-filesystem quarantine before recursive removal.
+7. Never pass `--volumes` to Docker cleanup.
 
 ## Quick start
 
 ```bash
-# Inspect default development roots without deleting anything
-devclean scan --all --global-caches --docker
+# Audit generated artifacts older than one week and at least 500 MiB
+devclean scan --all --older-than 7d --min-size 500MiB
 
-# Export a standalone HTML audit
-devclean scan --all --global-caches \
-  --format html --output devclean-audit.html
+# Save a privacy-safe HTML audit
+devclean scan --all --global-caches --docker \
+  --redact-paths --format html --output devclean-audit.html
 
-# Conservative cleanup: Rust targets, node_modules, framework caches
-devclean clean --yes
+# Conservative cleanup: target, node_modules, framework caches
+devclean clean --select --report devclean-before.html
 
-# Comprehensive generated-artifact cleanup plus Docker cache
-# Docker volumes are still preserved.
-devclean clean --all --global-caches --docker --yes \
-  --report devclean-before.html
+# Reclaim only enough to reach 100 GiB free
+devclean clean --all --target-free 100GiB --yes
+
+# Build cache only; volumes are untouched
+devclean clean --docker --docker-older-than 168h --yes
+
+# Broader Docker cleanup requires a distinct flag; still never volumes
+devclean clean --docker-system --docker-older-than 168h --yes
 ```
 
-Run `devclean doctor` to inspect default roots, available tools, and active safety guarantees.
+Run `devclean doctor` to inspect roots, config search paths, tools, and active safety guarantees.
 
 ## What it cleans
 
-| Category | Conservative | With `--all` | Classification evidence |
-|---|:---:|:---:|---|
-| Cargo `target` | Yes | Yes | Exact name plus Rust build markers |
-| `node_modules` | Yes | Yes | Exact dependency-directory name |
-| Framework cache | Yes | Yes | Known names such as `.next` and `.svelte-kit` |
-| Build output | No | Yes | `build` below a recognized project manifest |
-| Test/analysis cache | No | Yes | Exact mutation, lint, type-check, or test-cache name |
-| Global tool cache | No | With `--global-caches` | Exact path on the built-in allowlist |
-| Docker cache | No | With `--docker` | `docker system prune -af`, never volumes |
+| Category | Default clean | Opt-in | Evidence |
+|---|:---:|---|---|
+| Cargo `target` | Yes | — | Exact name plus Cargo build markers |
+| `node_modules` | Yes | — | Exact dependency-directory name |
+| Framework cache | Yes | — | Known names such as `.next` and `.svelte-kit` |
+| Build/test output | No | `--all` | Recognized manifest plus exact generated name |
+| Package/tool cache | No | `--global-caches` | Exact platform-aware allowlist |
+| Model/runtime cache | No | `--expensive-caches` | Separate allowlist because redownload cost is high |
+| Docker build cache | No | `--docker` | `docker builder prune`, never volumes |
+| Docker system data | No | `--docker-system` | Stopped containers, unused images/networks/cache; never volumes |
 
-## What it never cleans
+Ambiguous `dist`, `out`, `coverage`, archives, user data, database paths, VCS metadata, and Docker volumes remain out of scope.
 
-- Docker or container volumes.
-- PostgreSQL and other database directories.
-- Backup directories or archive files.
-- Git, Mercurial, or Subversion metadata.
-- Environment and secret files.
-- User documents, downloads, photos, or messaging data.
-- Ambiguous `dist`, `out`, or `coverage` directories without explicit evidence.
+## Filters and selection
 
-See [docs/SAFETY.md](docs/SAFETY.md) for the threat model and deletion invariants.
+- `--older-than 30d`: require the newest observed file to be old enough.
+- `--min-size 1GiB`: ignore small candidates.
+- `--exclude 'vendor/**'`: skip matching absolute, root-relative, or basename paths.
+- `--select`: choose candidate numbers and ranges interactively.
+- `--target-free 100GiB`: select only enough largest candidates to reach a free-space target on the first root filesystem.
+- `--allow-tracked`: explicit escape hatch for vendored/generated content committed to Git.
+
+## Configuration
+
+`devclean` loads the first existing file from `./devclean.toml` or the platform config directory. Pass `--config PATH` to select one explicitly. CLI values override config values.
+
+```toml
+[scan]
+roots = ["/Users/me/Dev"]
+exclude = ["vendor/**", "archive/**"]
+older_than = "14d"
+min_size = "100MiB"
+max_depth = 24
+
+[clean]
+protect_git_tracked = true
+expensive_caches = false
+```
+
+See [`devclean.example.toml`](devclean.example.toml).
+
+## Reports and automation
+
+```bash
+devclean scan --format table
+devclean scan --format json --redact-paths
+devclean scan --format jsonl --redact-paths
+devclean scan --format html --output report.html --redact-paths
+```
+
+HTML and JSON can contain private absolute paths unless `--redact-paths` is used. JSONL emits one candidate event per line followed by a summary event.
+
+Generate shell integrations without extra packages:
+
+```bash
+devclean completions zsh > _devclean
+devclean completions bash > devclean.bash
+devclean manpage --output devclean.1
+```
 
 ## Installation
 
 ### GitHub release
 
-Download the archive for your platform from [the latest release](https://github.com/tuanle96/devclean/releases/latest), verify it against `SHA256SUMS`, and place `devclean` on your `PATH`.
-
-### Cargo from Git
+Download the archive for your platform from [the latest release](https://github.com/tuanle96/devclean/releases/latest), verify `SHA256SUMS`, then verify build provenance:
 
 ```bash
-cargo install --git https://github.com/tuanle96/devclean --tag v0.1.0 --locked
+gh attestation verify devclean-*.tar.gz -R tuanle96/devclean
+```
+
+### Cargo
+
+The crates.io package is named `devclean-cli`; the installed executable is `devclean`.
+
+```bash
+cargo install devclean-cli --locked
+```
+
+### Homebrew
+
+```bash
+brew install tuanle96/tap/devclean
 ```
 
 ### Build from source
@@ -100,34 +141,13 @@ The minimum supported Rust version is 1.85.
 
 ## Codex skill
 
-The repository includes a companion skill at [`skills/dev-disk-cleaner`](skills/dev-disk-cleaner):
+The companion skill lives at [`skills/dev-disk-cleaner`](skills/dev-disk-cleaner):
 
 ```bash
 cp -R skills/dev-disk-cleaner ~/.codex/skills/dev-disk-cleaner
 ```
 
-The skill makes agents scan first, save and open HTML evidence, request cleanup authority, preserve dirty worktrees and persistent data, and verify free space after cleanup.
-
-## CLI overview
-
-```text
-devclean scan [OPTIONS] [ROOT]...
-devclean clean [OPTIONS] [ROOT]...
-devclean doctor
-```
-
-Useful options:
-
-- `--category <CATEGORY>`: select one or more exact categories.
-- `--all`: include recognized build and test outputs.
-- `--global-caches`: include allowlisted downloaded caches.
-- `--docker`: show Docker usage during scan or prune unused Docker data during clean.
-- `--format table|json|html`: choose the scan output format.
-- `--output <PATH>`: write a scan report to a file.
-- `--report <PATH>`: save a pre-clean HTML report.
-- `--yes`: skip the interactive `DELETE` confirmation.
-
-Without explicit roots, `devclean` scans `~/Dev` and `~/Documents/Codex` when present, then falls back to the current directory.
+It standardizes audit, authorization, narrow cleanup, HTML evidence, regeneration diagnosis, and post-clean verification.
 
 ## Development
 
@@ -135,14 +155,15 @@ Without explicit roots, `devclean` scans `~/Dev` and `~/Documents/Codex` when pr
 cargo fmt --all -- --check
 cargo test --all-features --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo package --locked
 ```
 
-Architecture and contribution guidance are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+See [architecture](docs/ARCHITECTURE.md), [safety model](docs/SAFETY.md), [performance](docs/PERFORMANCE.md), [distribution](docs/DISTRIBUTION.md), and [contributing](CONTRIBUTING.md).
 
 ## Community and security
 
 - Ask usage questions in [GitHub Discussions](https://github.com/tuanle96/devclean/discussions).
-- Report normal bugs through the [issue tracker](https://github.com/tuanle96/devclean/issues).
+- Report bugs through [GitHub Issues](https://github.com/tuanle96/devclean/issues).
 - Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
 - Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 

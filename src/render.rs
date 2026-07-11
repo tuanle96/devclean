@@ -1,29 +1,51 @@
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+use serde_json::json;
 
-use crate::model::{OutputFormat, ScanReport};
+use crate::model::{Candidate, OutputFormat, RenderOptions, ScanReport};
 use crate::scanner::totals_by_category;
 
-/// Renders a scan report in the requested format.
+/// Renders a scan report without path redaction.
 ///
 /// # Errors
 ///
 /// Returns an error when JSON serialization fails.
 pub fn render(report: &ScanReport, format: OutputFormat) -> Result<String> {
+    render_with_options(report, format, RenderOptions::default())
+}
+
+/// Renders a scan report with presentation controls.
+///
+/// # Errors
+///
+/// Returns an error when JSON serialization fails.
+pub fn render_with_options(
+    report: &ScanReport,
+    format: OutputFormat,
+    options: RenderOptions,
+) -> Result<String> {
+    let display_report = if options.redact_paths {
+        redact_report(report)
+    } else {
+        report.clone()
+    };
     match format {
-        OutputFormat::Table => Ok(render_table(report)),
-        OutputFormat::Json => Ok(serde_json::to_string_pretty(report)?),
-        OutputFormat::Html => Ok(render_html(report)),
+        OutputFormat::Table => Ok(render_table(&display_report)),
+        OutputFormat::Json => Ok(serde_json::to_string_pretty(&display_report)?),
+        OutputFormat::Jsonl => render_jsonl(&display_report),
+        OutputFormat::Html => Ok(render_html(&display_report)),
     }
 }
 
-/// Formats bytes using binary units.
+/// Formats bytes with binary units.
 #[must_use]
 pub fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut divisor = 1_u64;
     let mut unit = 0;
+    let mut divisor = 1_u64;
     while bytes / divisor >= 1024 && unit < UNITS.len() - 1 {
         divisor = divisor.saturating_mul(1024);
         unit += 1;
@@ -31,28 +53,34 @@ pub fn human_bytes(bytes: u64) -> String {
     if unit == 0 {
         format!("{bytes} {}", UNITS[unit])
     } else {
-        let tenths = (u128::from(bytes) * 10 + u128::from(divisor / 2)) / u128::from(divisor);
-        format!("{}.{} {}", tenths / 10, tenths % 10, UNITS[unit])
+        let whole = bytes / divisor;
+        let hundredths = bytes % divisor * 100 / divisor;
+        format!("{whole}.{hundredths:02} {}", UNITS[unit])
     }
 }
 
 fn render_table(report: &ScanReport) -> String {
     let mut output = String::new();
-    let _ = writeln!(output, "{:<18} {:>12}  PATH", "CATEGORY", "SIZE");
-    let _ = writeln!(output, "{}", "-".repeat(78));
+    let _ = writeln!(
+        output,
+        "{:<23} {:>12} {:>10}  PATH",
+        "CATEGORY", "SIZE", "AGE"
+    );
+    let _ = writeln!(output, "{}", "-".repeat(92));
     for candidate in &report.candidates {
         let _ = writeln!(
             output,
-            "{:<18} {:>12}  {}",
+            "{:<23} {:>12} {:>10}  {}",
             candidate.category,
             human_bytes(candidate.bytes),
+            human_age(candidate),
             candidate.path.display()
         );
     }
-    let _ = writeln!(output, "{}", "-".repeat(78));
+    let _ = writeln!(output, "{}", "-".repeat(92));
     let _ = writeln!(
         output,
-        "{} candidates, {} reclaimable (estimated)",
+        "{} candidates, {} reclaimable",
         report.candidates.len(),
         human_bytes(report.total_bytes)
     );
@@ -62,57 +90,131 @@ fn render_table(report: &ScanReport) -> String {
     output
 }
 
+fn render_jsonl(report: &ScanReport) -> Result<String> {
+    let mut output = String::new();
+    for candidate in &report.candidates {
+        writeln!(
+            output,
+            "{}",
+            serde_json::to_string(&json!({"type": "candidate", "candidate": candidate}))?
+        )?;
+    }
+    writeln!(
+        output,
+        "{}",
+        serde_json::to_string(&json!({
+            "type": "summary",
+            "candidate_count": report.candidates.len(),
+            "total_bytes": report.total_bytes,
+            "warnings": report.warnings,
+        }))?
+    )?;
+    Ok(output)
+}
+
 fn render_html(report: &ScanReport) -> String {
     let totals = totals_by_category(report);
-    let mut rows = String::new();
-    for candidate in &report.candidates {
-        let _ = writeln!(
-            rows,
-            "<tr><td><span class=\"tag\">{}</span></td><td class=\"size\">{}</td><td><code>{}</code></td><td>{}</td></tr>",
-            candidate.category,
-            human_bytes(candidate.bytes),
-            escape_html(&candidate.path.display().to_string()),
-            escape_html(&candidate.reason)
-        );
-    }
     let mut cards = String::new();
-    let mut sorted_totals: Vec<_> = totals.into_iter().collect();
-    sorted_totals.sort_by_key(|(category, _)| category.to_string());
-    for (category, bytes) in sorted_totals {
+    for (category, bytes) in totals {
         let _ = write!(
             cards,
-            "<div class=\"card\"><span>{category}</span><strong>{}</strong></div>",
+            "<article><span>{}</span><strong>{}</strong></article>",
+            escape_html(&category.to_string()),
             human_bytes(bytes)
         );
     }
-    let warnings = if report.warnings.is_empty() {
-        "<p class=\"ok\">No traversal warnings.</p>".to_owned()
-    } else {
-        let mut items = String::new();
-        for warning in &report.warnings {
-            let _ = write!(items, "<li>{}</li>", escape_html(warning));
-        }
-        format!("<ul>{items}</ul>")
-    };
 
+    let mut rows = String::new();
+    for candidate in &report.candidates {
+        let _ = write!(
+            rows,
+            "<tr><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            escape_html(&candidate.category.to_string()),
+            escape_html(&candidate.path.to_string_lossy()),
+            human_bytes(candidate.bytes),
+            human_age(candidate),
+            escape_html(&candidate.reason)
+        );
+    }
+
+    let mut warnings = String::new();
+    for warning in &report.warnings {
+        let _ = write!(warnings, "<li>{}</li>", escape_html(warning));
+    }
     format!(
-        r#"<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>devclean scan report</title><style>
-:root{{--bg:#08111f;--panel:#101c2d;--line:#23344d;--text:#e8eef7;--muted:#9eabc0;--accent:#65d6ad}}
-*{{box-sizing:border-box}}body{{margin:0;background:linear-gradient(145deg,#07101d,#101a29);color:var(--text);font:15px/1.5 ui-sans-serif,system-ui;padding:40px}}
-main{{max-width:1200px;margin:auto}}h1{{font-size:36px;margin:0 0 8px}}.lead{{color:var(--muted);margin:0 0 28px}}
-.hero{{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:28px;margin-bottom:22px}}.hero strong{{color:var(--accent);font-size:38px;display:block}}
-.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:20px 0}}.card{{background:#0d1828;border:1px solid var(--line);padding:16px;border-radius:12px}}.card span{{color:var(--muted);display:block}}.card strong{{font-size:20px}}
-.table-wrap{{overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:13px 15px;text-align:left;border-bottom:1px solid var(--line)}}th{{color:var(--muted);font-size:12px;text-transform:uppercase}}.size{{white-space:nowrap;font-weight:700}}code{{color:#c5d8f2}}.tag{{color:var(--accent)}}.ok{{color:var(--accent)}}
-</style></head><body><main><h1>devclean scan</h1><p class="lead">Read-only inventory of rebuildable development artifacts.</p>
-<section class="hero"><span>Estimated reclaimable space</span><strong>{total}</strong><span>{count} candidates across {roots} roots</span><div class="cards">{cards}</div></section>
-<div class="table-wrap"><table><thead><tr><th>Category</th><th>Size</th><th>Path</th><th>Evidence</th></tr></thead><tbody>{rows}</tbody></table></div>
-<section><h2>Warnings</h2>{warnings}</section></main></body></html>"#,
-        total = human_bytes(report.total_bytes),
-        count = report.candidates.len(),
-        roots = report.roots.len(),
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>devclean scan report</title><style>
+:root{{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui;background:#08111f;color:#ecf3ff}}body{{margin:0}}main{{max-width:1180px;margin:auto;padding:48px 24px}}h1{{font-size:42px;margin-bottom:8px}}.lead{{color:#aebdd2}}.summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:28px 0}}article{{background:#111d31;border:1px solid #263854;border-radius:14px;padding:16px}}article span{{display:block;color:#94a7c2;font-size:12px}}article strong{{font-size:22px}}.total{{color:#5fe0a5}}.table{{overflow:auto;border:1px solid #263854;border-radius:14px}}table{{width:100%;border-collapse:collapse;min-width:900px}}th,td{{padding:12px;text-align:left;border-bottom:1px solid #263854}}th{{background:#15233a;color:#cbd9ed}}td{{color:#b7c5da}}code{{color:#dbe9ff}}.warnings{{color:#ffcf72}}</style></head><body><main><h1>devclean scan</h1><p class="lead">Read-only inventory of rebuildable development artifacts.</p><p class="total"><strong>{}</strong> across {} candidates</p><section class="summary">{}</section><div class="table"><table><thead><tr><th>Category</th><th>Path</th><th>Size</th><th>Age</th><th>Evidence</th></tr></thead><tbody>{}</tbody></table></div><section class="warnings"><h2>Warnings</h2><ul>{}</ul></section></main></body></html>"#,
+        human_bytes(report.total_bytes),
+        report.candidates.len(),
+        cards,
+        rows,
+        warnings
     )
+}
+
+fn redact_report(report: &ScanReport) -> ScanReport {
+    let mut redacted = report.clone();
+    for candidate in &mut redacted.candidates {
+        candidate.path = redact_path(&candidate.path, &report.roots);
+    }
+    redacted.roots = report
+        .roots
+        .iter()
+        .enumerate()
+        .map(|(index, _)| PathBuf::from(format!("<root:{}>", index + 1)))
+        .collect();
+    redacted.warnings = report
+        .warnings
+        .iter()
+        .map(|warning| redact_text(warning, &report.roots))
+        .collect();
+    redacted
+}
+
+fn redact_text(value: &str, roots: &[PathBuf]) -> String {
+    let mut redacted = value.to_owned();
+    for (index, root) in roots.iter().enumerate() {
+        let root_text = root.to_string_lossy();
+        redacted = redacted.replace(root_text.as_ref(), &format!("<root:{}>", index + 1));
+    }
+    if let Some(base) = directories::BaseDirs::new() {
+        let home = base.home_dir().to_string_lossy();
+        redacted = redacted.replace(home.as_ref(), "<home>");
+    }
+    redacted
+}
+
+fn redact_path(path: &Path, roots: &[PathBuf]) -> PathBuf {
+    for (index, root) in roots.iter().enumerate() {
+        if let Ok(relative) = path.strip_prefix(root) {
+            return PathBuf::from(format!("<root:{}>", index + 1)).join(relative);
+        }
+    }
+    if let Some(base) = directories::BaseDirs::new() {
+        if let Ok(relative) = path.strip_prefix(base.home_dir()) {
+            return PathBuf::from("<home>").join(relative);
+        }
+    }
+    PathBuf::from("<external>").join(path.file_name().unwrap_or_default())
+}
+
+fn human_age(candidate: &Candidate) -> String {
+    let Some(modified) = candidate.modified_at_unix else {
+        return "unknown".to_owned();
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(modified, |duration| duration.as_secs());
+    let seconds = now.saturating_sub(modified);
+    if seconds >= 86_400 {
+        format!("{}d", seconds / 86_400)
+    } else if seconds >= 3_600 {
+        format!("{}h", seconds / 3_600)
+    } else if seconds >= 60 {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn escape_html(value: &str) -> String {
@@ -127,30 +229,63 @@ fn escape_html(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ScanReport;
+    use crate::model::{Category, ScanReport};
+
+    fn report(path: &str) -> ScanReport {
+        ScanReport {
+            roots: vec![PathBuf::from("/private/project")],
+            candidates: vec![Candidate {
+                category: Category::NodeModules,
+                path: PathBuf::from(path),
+                bytes: 1024,
+                reason: "test".to_owned(),
+                modified_at_unix: None,
+            }],
+            warnings: Vec::new(),
+            total_bytes: 1024,
+            protect_git_tracked: true,
+        }
+    }
 
     #[test]
     fn human_bytes_should_use_binary_units() {
-        assert_eq!(human_bytes(1_073_741_824), "1.0 GiB");
+        assert_eq!(human_bytes(1024), "1.00 KiB");
     }
 
     #[test]
     fn render_html_should_escape_candidate_paths() -> Result<()> {
-        let report = ScanReport {
-            roots: Vec::new(),
-            candidates: vec![crate::Candidate {
-                category: crate::Category::NodeModules,
-                path: "a<b".into(),
-                bytes: 1,
-                reason: "test".to_owned(),
-            }],
-            warnings: Vec::new(),
-            total_bytes: 1,
-        };
+        let output = render(&report("/tmp/<script>"), OutputFormat::Html)?;
 
-        let html = render(&report, OutputFormat::Html)?;
+        assert!(!output.contains("<script>"));
+        Ok(())
+    }
 
-        assert!(html.contains("a&lt;b"));
+    #[test]
+    fn render_should_redact_paths_in_json() -> Result<()> {
+        let output = render_with_options(
+            &report("/private/project/node_modules"),
+            OutputFormat::Json,
+            RenderOptions { redact_paths: true },
+        )?;
+
+        assert!(!output.contains("/private/project"));
+        Ok(())
+    }
+
+    #[test]
+    fn render_should_redact_paths_inside_warnings() -> Result<()> {
+        let mut input = report("/private/project/node_modules");
+        input
+            .warnings
+            .push("protected /private/project/node_modules".to_owned());
+
+        let output = render_with_options(
+            &input,
+            OutputFormat::Json,
+            RenderOptions { redact_paths: true },
+        )?;
+
+        assert!(!output.contains("/private/project"));
         Ok(())
     }
 }

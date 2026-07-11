@@ -1,0 +1,10 @@
+[scan]
+# roots = ["~/Dev", "~/Documents/Codex"]
+exclude = ["vendor/**", "archive/**"]
+older_than = "14d"
+min_size = "100MiB"
+max_depth = 24
+
+[clean]
+protect_git_tracked = true
+expensive_caches = false

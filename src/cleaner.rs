@@ -1,20 +1,26 @@
-use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::{Result, anyhow, bail};
+use directories::BaseDirs;
 use serde::Serialize;
 
 use crate::model::{Candidate, Category, ScanReport};
-use crate::scanner::{classify, global_cache_paths};
+use crate::policy::contains_git_tracked_files;
+use crate::scanner::{classify, expensive_global_cache_paths, global_cache_paths};
 
-/// Result of a cleanup operation.
-#[derive(Debug, Clone, Serialize)]
+static QUARANTINE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Outcome of deleting a validated scan report.
+#[derive(Debug, Serialize)]
 pub struct CleanReport {
-    /// Successfully removed candidates.
+    /// Candidates removed successfully.
     pub removed: Vec<Candidate>,
-    /// Paths that failed safety validation or deletion.
+    /// Candidate-specific failures. Cleanup continues after a failure.
     pub failures: Vec<String>,
-    /// Estimated bytes removed successfully.
+    /// Scan-time allocated bytes represented by successful removals.
     pub removed_bytes: u64,
 }
 
@@ -23,17 +29,25 @@ pub struct CleanReport {
 pub fn clean(scan_report: &ScanReport) -> CleanReport {
     let mut removed = Vec::new();
     let mut failures = Vec::new();
-    let home = env::var_os("HOME").map(PathBuf::from);
-    let allowed_global = home.as_deref().map(global_cache_paths).unwrap_or_default();
+    let allowed_global = BaseDirs::new().map_or_else(Vec::new, |base| {
+        let mut paths = global_cache_paths(base.home_dir());
+        paths.extend(expensive_global_cache_paths(base.home_dir()));
+        paths
+    });
 
     for candidate in &scan_report.candidates {
-        if let Err(error) = validate_candidate(candidate, &scan_report.roots, &allowed_global) {
+        if let Err(error) = validate_candidate(
+            candidate,
+            &scan_report.roots,
+            &allowed_global,
+            scan_report.protect_git_tracked,
+        ) {
             failures.push(format!("{}: {error}", candidate.path.display()));
             continue;
         }
-        match fs::remove_dir_all(&candidate.path) {
+        match quarantine_and_remove(&candidate.path) {
             Ok(()) => removed.push(candidate.clone()),
-            Err(error) => failures.push(format!("{}: {error}", candidate.path.display())),
+            Err(error) => failures.push(format!("{}: {error:#}", candidate.path.display())),
         }
     }
 
@@ -49,13 +63,17 @@ fn validate_candidate(
     candidate: &Candidate,
     roots: &[PathBuf],
     allowed_global: &[PathBuf],
+    protect_git_tracked: bool,
 ) -> Result<(), String> {
     let metadata = fs::symlink_metadata(&candidate.path).map_err(|error| error.to_string())?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err("candidate is no longer a real directory".to_owned());
     }
 
-    if candidate.category == Category::GlobalCache {
+    if matches!(
+        candidate.category,
+        Category::GlobalCache | Category::ExpensiveGlobalCache
+    ) {
         if allowed_global.iter().any(|path| path == &candidate.path) {
             return Ok(());
         }
@@ -76,6 +94,44 @@ fn validate_candidate(
     if current_category != candidate.category {
         return Err("candidate category changed after scanning".to_owned());
     }
+    if protect_git_tracked {
+        match contains_git_tracked_files(&candidate.path) {
+            Ok(true) => return Err("candidate now contains Git-tracked files".to_owned()),
+            Ok(false) => {}
+            Err(error) => return Err(format!("Git tracked-file guard failed: {error:#}")),
+        }
+    }
+    Ok(())
+}
+
+fn quarantine_and_remove(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("candidate has no parent directory"))?;
+    let sequence = QUARANTINE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let quarantine = parent.join(format!(
+        ".devclean-quarantine-{}-{timestamp}-{sequence}",
+        std::process::id()
+    ));
+    if quarantine.exists() {
+        bail!("unique quarantine path unexpectedly exists");
+    }
+    fs::rename(path, &quarantine)?;
+
+    let metadata = fs::symlink_metadata(&quarantine)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        let _ = fs::rename(&quarantine, path);
+        bail!("candidate changed type during atomic quarantine");
+    }
+    if let Err(error) = fs::remove_dir_all(&quarantine) {
+        let restored = fs::rename(&quarantine, path).is_ok();
+        bail!(
+            "failed to remove quarantined directory: {error}; restored original path: {restored}"
+        );
+    }
     Ok(())
 }
 
@@ -84,11 +140,24 @@ mod tests {
     use std::collections::HashSet;
     use std::fs;
 
-    use anyhow::Result;
     use tempfile::tempdir;
 
     use super::*;
     use crate::scanner::{ScanOptions, scan};
+
+    fn options(root: &Path, category: Category) -> ScanOptions {
+        ScanOptions {
+            roots: vec![root.to_path_buf()],
+            categories: HashSet::from([category]),
+            include_global_caches: false,
+            include_expensive_caches: false,
+            max_depth: 8,
+            excludes: Vec::new(),
+            older_than: None,
+            min_size: 0,
+            protect_git_tracked: false,
+        }
+    }
 
     #[test]
     fn clean_should_remove_scanned_node_modules() -> Result<()> {
@@ -96,12 +165,7 @@ mod tests {
         let modules = temporary.path().join("node_modules");
         fs::create_dir_all(&modules)?;
         fs::write(modules.join("dependency.js"), "content")?;
-        let report = scan(&ScanOptions {
-            roots: vec![temporary.path().to_path_buf()],
-            categories: HashSet::from([Category::NodeModules]),
-            include_global_caches: false,
-            max_depth: 8,
-        })?;
+        let report = scan(&options(temporary.path(), Category::NodeModules))?;
 
         let clean_report = clean(&report);
 
@@ -115,17 +179,36 @@ mod tests {
         let temporary = tempdir()?;
         let target = temporary.path().join("target");
         fs::create_dir_all(target.join("debug"))?;
-        let report = scan(&ScanOptions {
-            roots: vec![temporary.path().to_path_buf()],
-            categories: HashSet::from([Category::RustTarget]),
-            include_global_caches: false,
-            max_depth: 8,
-        })?;
+        let report = scan(&options(temporary.path(), Category::RustTarget))?;
         fs::remove_dir_all(target.join("debug"))?;
 
         let clean_report = clean(&report);
 
         assert_eq!(clean_report.failures.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn clean_should_leave_no_quarantine_after_success() -> Result<()> {
+        let temporary = tempdir()?;
+        let modules = temporary.path().join("node_modules");
+        fs::create_dir_all(&modules)?;
+        let report = scan(&options(temporary.path(), Category::NodeModules))?;
+
+        let _ = clean(&report);
+        let leftovers = temporary
+            .path()
+            .read_dir()?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".devclean-quarantine")
+            })
+            .count();
+
+        assert_eq!(leftovers, 0);
         Ok(())
     }
 }

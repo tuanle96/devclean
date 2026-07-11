@@ -20,12 +20,14 @@ pub enum Category {
     TestCache,
     /// Downloaded package-manager or tool caches.
     GlobalCache,
+    /// Large runtimes or model caches that are expensive to restore.
+    ExpensiveGlobalCache,
 }
 
 impl Category {
     /// Returns all categories discovered by a comprehensive scan.
     #[must_use]
-    pub fn all() -> [Self; 6] {
+    pub fn all() -> [Self; 7] {
         [
             Self::RustTarget,
             Self::NodeModules,
@@ -33,6 +35,7 @@ impl Category {
             Self::BuildOutput,
             Self::TestCache,
             Self::GlobalCache,
+            Self::ExpensiveGlobalCache,
         ]
     }
 
@@ -52,6 +55,7 @@ impl fmt::Display for Category {
             Self::BuildOutput => "build-output",
             Self::TestCache => "test-cache",
             Self::GlobalCache => "global-cache",
+            Self::ExpensiveGlobalCache => "expensive-global-cache",
         };
         formatter.write_str(value)
     }
@@ -68,6 +72,8 @@ pub struct Candidate {
     pub bytes: u64,
     /// Evidence used to classify the directory.
     pub reason: String,
+    /// Latest observed modification time as seconds since the Unix epoch.
+    pub modified_at_unix: Option<u64>,
 }
 
 /// Result of scanning one or more roots.
@@ -81,6 +87,13 @@ pub struct ScanReport {
     pub warnings: Vec<String>,
     /// Total estimated allocated bytes for all candidates.
     pub total_bytes: u64,
+    /// Whether cleanup must repeat the Git tracked-file guard.
+    #[serde(default = "default_true")]
+    pub protect_git_tracked: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// Human- or machine-readable report format.
@@ -90,6 +103,15 @@ pub enum OutputFormat {
     Table,
     /// Structured JSON.
     Json,
+    /// One JSON object per line for streaming automation.
+    Jsonl,
     /// Standalone HTML document.
     Html,
+}
+
+/// Controls presentation without changing the underlying scan result.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RenderOptions {
+    /// Replace absolute paths with stable root-relative placeholders.
+    pub redact_paths: bool,
 }
