@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args as ClapArgs, Subcommand};
 use directories::BaseDirs;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const LABEL: &str = "dev.tuanle.devclean.schedule";
 
 #[derive(Debug, ClapArgs)]
@@ -341,6 +343,7 @@ fn launchd_domain() -> Result<String> {
     ))
 }
 
+#[cfg(target_os = "macos")]
 fn xml(value: impl AsRef<Path>) -> String {
     value
         .as_ref()
