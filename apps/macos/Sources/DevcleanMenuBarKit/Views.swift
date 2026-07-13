@@ -15,6 +15,10 @@ public struct MenuContentView: View {
     /// Selection captured before an AI recommendation narrows it, so cancelling
     /// the confirmation restores exactly what the user had checked.
     @State var savedSelection: Set<String>?
+    /// Keyboard focus for the candidate lists (arrow-key navigation).
+    @State var listFocus: String?
+    /// Moves VoiceOver into a modal card the moment it is presented.
+    @AccessibilityFocusState var overlayFocus: OverlayFocusTarget?
 
     public init(model: AppModel) {
         self.model = model
@@ -46,6 +50,9 @@ public struct MenuContentView: View {
             }
         }
         .frame(width: 420)
+        // Modal cards can be taller than a short tab (e.g. an empty state), so give
+        // the window room while one is up instead of clipping the card.
+        .frame(minHeight: isPresentingOverlay ? 400 : nil)
         .onExitCommand {
             if cleanupConfirmation.isPresented {
                 cancelCleanup()

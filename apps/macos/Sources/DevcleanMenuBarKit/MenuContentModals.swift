@@ -32,7 +32,7 @@ extension MenuContentView {
                 cleanupConfirmationContent
             }
             .padding(20)
-            .frame(width: 310)
+            .frame(width: 380)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
             .overlay {
                 RoundedRectangle(cornerRadius: 18)
@@ -54,35 +54,38 @@ extension MenuContentView {
             VStack(alignment: .leading, spacing: 14) {
                 Text(holdPurgeTitle(for: request))
                     .font(.headline)
+                    .accessibilityFocused($overlayFocus, equals: .holdPurge)
+                    .onAppear { overlayFocus = .holdPurge }
 
                 Text(holdPurgeMessage(for: request))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Button(role: .destructive) {
-                    confirmHoldPurge(request)
-                } label: {
-                    Text(holdPurgeButtonTitle(for: request))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .disabled(model.isBusy)
-                .accessibilityIdentifier("hold-purge-confirm")
+                HStack(spacing: 8) {
+                    Spacer()
 
-                Button(role: .cancel) {
-                    holdPurgeRequest = nil
-                } label: {
-                    Text("Cancel")
-                        .frame(maxWidth: .infinity)
+                    Button("Cancel", role: .cancel) {
+                        holdPurgeRequest = nil
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("hold-purge-cancel")
+
+                    // Visually primary because deletion is this dialog's only
+                    // purpose; Return deliberately stays unbound.
+                    Button(role: .destructive) {
+                        confirmHoldPurge(request)
+                    } label: {
+                        Text(holdPurgeButtonTitle(for: request))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .disabled(model.isBusy)
+                    .accessibilityIdentifier("hold-purge-confirm")
                 }
-                .buttonStyle(.bordered)
-                .keyboardShortcut(.cancelAction)
-                .accessibilityIdentifier("hold-purge-cancel")
             }
             .padding(20)
-            .frame(width: 330)
+            .frame(width: 380)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
             .overlay {
                 RoundedRectangle(cornerRadius: 18)

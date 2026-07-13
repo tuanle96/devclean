@@ -28,11 +28,24 @@ extension MenuContentView {
                 .keyboardShortcut("r")
                 .help("Scan for artifacts again (⌘R)")
 
+                if aiInsightsEnabled {
+                    // The one manual entry point for AI recommendations; the
+                    // monitoring banner above the list is the only other surface.
+                    Button {
+                        presentAIInsight()
+                    } label: {
+                        Image(systemName: "sparkles")
+                    }
+                    .help("AI recommendations")
+                    .accessibilityLabel("AI recommendations")
+                    .accessibilityIdentifier("ai-recommend-open")
+                }
+
                 Spacer()
 
                 switch selectedSection {
                 case .clean:
-                    Button("Clean Selected") {
+                    Button(cleanButtonTitle) {
                         cleanupConfirmation.present()
                     }
                     .buttonStyle(.borderedProminent)
@@ -43,42 +56,29 @@ extension MenuContentView {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 case .holds:
-                    if !model.quarantineEntries.isEmpty {
-                        Button(role: .destructive) {
-                            holdPurgeRequest = .all
-                        } label: {
-                            Label("Delete All…", systemImage: "trash")
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityIdentifier("hold-delete-all")
-                    }
+                    // "Delete All" lives in the Holds summary menu, away from the
+                    // window edge; nothing competes with Scan down here.
+                    EmptyView()
                 }
             }
         }
         .controlSize(.large)
     }
 
+    /// States the consequence on the button itself ("Clean 38.77 GB…"), matching
+    /// the sizing pattern every destructive button in the app already follows.
+    var cleanButtonTitle: String {
+        model.selectedBytes > 0
+            ? "Clean \(ByteFormatting.string(model.selectedBytes))…"
+            : "Clean…"
+    }
+
     var footer: some View {
         HStack {
-            if #available(macOS 14.0, *) {
-                SettingsLink {
-                    Label("Settings…", systemImage: "gear")
-                }
-                .buttonStyle(.plain)
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        SettingsWindowFocusCoordinator.activateAfterSettingsLink()
-                    }
-                )
-            } else {
-                Button {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                    SettingsWindowFocusCoordinator.activateWhenAvailable()
-                } label: {
-                    Label("Settings…", systemImage: "gear")
-                }
-                .buttonStyle(.plain)
+            openSettingsButton {
+                Label("Settings…", systemImage: "gear")
             }
+            .buttonStyle(.plain)
             Spacer()
             Button("Quit") { NSApp.terminate(nil) }
                 .buttonStyle(.plain)
@@ -88,12 +88,30 @@ extension MenuContentView {
         .font(.caption)
     }
 
+    /// Opens Settings via the supported `SettingsLink` on macOS 14+, falling back
+    /// to the legacy selector only where no public API exists (macOS 13).
+    @ViewBuilder
+    func openSettingsButton<L: View>(@ViewBuilder label: () -> L) -> some View {
+        if #available(macOS 14.0, *) {
+            SettingsLink(label: label)
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        SettingsWindowFocusCoordinator.activateAfterSettingsLink()
+                    }
+                )
+        } else {
+            Button(action: openSettingsWindow, label: label)
+        }
+    }
+
     func openSettingsWindow() {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         SettingsWindowFocusCoordinator.activateWhenAvailable()
     }
 
+    /// Viewport cap for the candidate lists. Rows size themselves; this only
+    /// bounds how tall the scrollable area may grow inside the popover.
     func listHeight(for rowCount: Int, rowHeight: CGFloat) -> CGFloat {
-        min(340, max(100, CGFloat(rowCount) * rowHeight))
+        min(340, CGFloat(rowCount) * rowHeight)
     }
 }

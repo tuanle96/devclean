@@ -42,6 +42,16 @@ enum UIFormatting {
         guard let modifiedAtUnix else { return nil }
         return "built " + relativePast(modifiedAtUnix, now: now)
     }
+
+    /// Name of the project folder that owns an artifact ("Rust target · VibeTG").
+    /// Uses the scanner-provided project root when available, otherwise the
+    /// artifact's parent directory.
+    static func projectName(forPath path: String, projectRoot: String? = nil) -> String {
+        if let projectRoot, !projectRoot.isEmpty {
+            return URL(fileURLWithPath: projectRoot).lastPathComponent
+        }
+        return URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
+    }
 }
 
 /// One slice of the disk capacity bar shown in the header.

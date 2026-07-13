@@ -84,15 +84,18 @@ public final class AppModel: ObservableObject {
         phase.activityDescription
     }
 
+    /// One base glyph (externaldrive) whose badge carries the state, so the menu
+    /// bar icon never jumps between unrelated shapes. Busy adds a pulse on
+    /// macOS 14+ instead of swapping the symbol.
     public var menuBarSymbol: String {
         if errorMessage != nil {
-            return "exclamationmark.triangle.fill"
+            return "externaldrive.trianglebadge.exclamationmark"
         }
         return switch phase {
         case .scanning, .holding, .cleaning, .refreshing, .restoring, .purging:
-            "arrow.triangle.2.circlepath"
+            "externaldrive"
         case .idle where !(report?.reviewCandidates.isEmpty ?? true):
-            "magnifyingglass.circle"
+            "externaldrive.badge.questionmark"
         case .idle where (report?.totalBytes ?? 0) > 0:
             "externaldrive.badge.minus"
         case .idle:
@@ -554,13 +557,13 @@ public final class AppModel: ObservableObject {
 
     private func scanStatus(_ report: ScanReport) -> String {
         if report.candidates.isEmpty, report.reviewCandidates.isEmpty {
-            return "No eligible artifacts found. Observation mode will keep watching growth."
+            return "Nothing to clean right now. DevCleaner rescans every few hours."
         }
         if report.reviewCandidates.isEmpty {
             return "Found \(report.candidates.count) rebuildable artifacts."
         }
         return
-            "Found \(report.candidates.count) safe artifacts and \(report.reviewCandidates.count) review-only observations."
+            "Found \(report.candidates.count) safe artifacts · \(report.reviewCandidates.count) items waiting for review."
     }
 
     private func emitLearningSummary() {
