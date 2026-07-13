@@ -171,15 +171,19 @@ extension MenuContentView {
         }
         switch target {
         case .safe(let candidate):
-            let project = URL(fileURLWithPath: candidate.path).deletingLastPathComponent().lastPathComponent
-            return "\(candidate.category.title) · \(project) · \(ByteFormatting.string(candidate.bytes))"
+            let project = UIFormatting.projectName(
+                forPath: candidate.path,
+                workspaceRoots: model.workspaceRoots
+            )
+            return "\(project) · \(candidate.category.title) · \(ByteFormatting.string(candidate.bytes))"
         case .review(let candidate):
-            let projectPath =
-                candidate.projectRoot
-                ?? URL(fileURLWithPath: candidate.path).deletingLastPathComponent().path
-            let project = URL(fileURLWithPath: projectPath).lastPathComponent
+            let project = UIFormatting.projectName(
+                forPath: candidate.path,
+                projectRoot: candidate.projectRoot,
+                workspaceRoots: model.workspaceRoots
+            )
             return
-                "\(candidate.suggestedRule?.title ?? "Review artifact") · \(project) · \(ByteFormatting.string(candidate.bytes))"
+                "\(project) · \(candidate.suggestedRule?.title ?? "Review artifact") · \(ByteFormatting.string(candidate.bytes))"
         }
     }
 

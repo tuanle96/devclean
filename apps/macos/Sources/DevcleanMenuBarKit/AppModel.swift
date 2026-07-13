@@ -66,6 +66,12 @@ public final class AppModel: ObservableObject {
         } ?? []
     }
 
+    /// Workspace roots recognized by the scanner (Cargo/npm/Nx), used to name
+    /// the project a row belongs to.
+    public var workspaceRoots: [String] {
+        report?.workspaces.map(\.root) ?? []
+    }
+
     public var isRemoteMonitoringConfigured: Bool {
         (analytics as? MonitoringCenter)?.isRemoteConfigured ?? false
     }

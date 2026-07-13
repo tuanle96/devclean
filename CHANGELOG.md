@@ -13,6 +13,8 @@ All notable changes to this project are documented here following [Keep a Change
 
 - Scan roots are canonicalized and nested or duplicate roots are collapsed before traversal.
 - macOS Settings renders the automatic locations actually present on disk, labels custom-root override semantics, and describes the expanded opt-in cache group accurately.
+- macOS rows now lead with the owning project name; the artifact type moves to the icon tooltip, path suffix, and VoiceOver label, and artifact age and hold expiry render as capsule chips beside the path.
+- macOS project names resolve from scanner-recognized workspace roots first, and the parent-directory fallback skips one generic member folder (services, backend, packages, …) unless it sits directly under a container folder like ~/Dev.
 
 ### Security
 

@@ -159,11 +159,18 @@ public struct ArtifactObservation: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// Minimal projection of the scanner's workspace summary — the app only needs
+/// the root path to name projects; counts and category maps stay CLI-side.
+public struct WorkspaceRootSummary: Codable, Equatable, Sendable {
+    public let root: String
+}
+
 public struct ScanReport: Codable, Equatable, Sendable {
     public let roots: [String]
     public let candidates: [CleanupCandidate]
     public let reviewCandidates: [ReviewCandidate]
     public let learningObservations: [ArtifactObservation]
+    public let workspaces: [WorkspaceRootSummary]
     public let warnings: [String]
     public let totalBytes: UInt64
     public let reviewTotalBytes: UInt64
@@ -175,6 +182,7 @@ public struct ScanReport: Codable, Equatable, Sendable {
         case candidates
         case reviewCandidates = "review_candidates"
         case learningObservations = "learning_observations"
+        case workspaces
         case warnings
         case totalBytes = "total_bytes"
         case reviewTotalBytes = "review_total_bytes"
@@ -195,6 +203,12 @@ public struct ScanReport: Codable, Equatable, Sendable {
             try values.decodeIfPresent(
                 [ArtifactObservation].self,
                 forKey: .learningObservations
+            ) ?? []
+        // The scanner omits the key entirely when no workspace roots were found.
+        workspaces =
+            try values.decodeIfPresent(
+                [WorkspaceRootSummary].self,
+                forKey: .workspaces
             ) ?? []
         warnings = try values.decode([String].self, forKey: .warnings)
         totalBytes = try values.decode(UInt64.self, forKey: .totalBytes)
@@ -217,6 +231,7 @@ public struct ScanReport: Codable, Equatable, Sendable {
         try values.encode(candidates, forKey: .candidates)
         try values.encode(reviewCandidates, forKey: .reviewCandidates)
         try values.encode(learningObservations, forKey: .learningObservations)
+        try values.encode(workspaces, forKey: .workspaces)
         try values.encode(warnings, forKey: .warnings)
         try values.encode(totalBytes, forKey: .totalBytes)
         try values.encode(reviewTotalBytes, forKey: .reviewTotalBytes)

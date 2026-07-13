@@ -17,25 +17,30 @@ struct CandidateRow: View {
                     .frame(width: 18)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
+                    .help(candidate.category.title)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
+                        // The project is the title; the artifact type lives in the
+                        // icon, its tooltip, the path suffix, and VoiceOver.
                         Text(titleText)
-                            .font(.subheadline)
+                            .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                         Spacer()
-                        if let age = UIFormatting.ageText(candidate.modifiedAtUnix) {
-                            Text(age).font(.caption2).foregroundStyle(.tertiary)
-                        }
                         Text(ByteFormatting.string(candidate.bytes))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
-                    Text((candidate.path as NSString).abbreviatingWithTildeInPath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .help(candidate.path)
+                    HStack(spacing: 6) {
+                        Text((candidate.path as NSString).abbreviatingWithTildeInPath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(candidate.path)
+                        if let age = UIFormatting.ageText(candidate.modifiedAtUnix) {
+                            MetaChip(text: age)
+                        }
+                    }
                 }
             }
             .padding(.vertical, 4)
@@ -58,16 +63,12 @@ struct CandidateRow: View {
                 model.recordFeedback(.neverClean, path: candidate.path)
             }
         }
-        .accessibilityLabel(
-            ([candidate.category.title, projectName, ByteFormatting.string(candidate.bytes), "rebuildable"]
-                .compactMap { $0 })
-                .joined(separator: ", ")
-        )
+        .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(candidate.path)
     }
 
     private var titleText: String {
-        projectName.map { "\(candidate.category.title) · \($0)" } ?? candidate.category.title
+        projectName ?? candidate.category.title
     }
 
     /// Global caches live under ~/Library or dot-folders, where the parent
@@ -77,8 +78,21 @@ struct CandidateRow: View {
         case .globalCache, .expensiveGlobalCache:
             nil
         default:
-            UIFormatting.projectName(forPath: candidate.path)
+            UIFormatting.projectName(
+                forPath: candidate.path,
+                workspaceRoots: model.workspaceRoots
+            )
         }
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [titleText]
+        if titleText != candidate.category.title {
+            parts.append(candidate.category.title)
+        }
+        parts.append(ByteFormatting.string(candidate.bytes))
+        parts.append("rebuildable")
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -94,11 +108,8 @@ struct ReviewCandidateRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(title).font(.subheadline).lineLimit(1)
+                    Text(title).font(.subheadline.weight(.medium)).lineLimit(1)
                     Spacer()
-                    if let age = UIFormatting.ageText(candidate.modifiedAtUnix) {
-                        Text(age).font(.caption2).foregroundStyle(.tertiary)
-                    }
                     Text(ByteFormatting.string(candidate.bytes))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -112,12 +123,17 @@ struct ReviewCandidateRow: View {
                             )
                     }
                 }
-                Text((candidate.path as NSString).abbreviatingWithTildeInPath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help("\(candidate.path)\n\(candidate.reason)")
+                HStack(spacing: 6) {
+                    Text((candidate.path as NSString).abbreviatingWithTildeInPath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help("\(candidate.path)\n\(candidate.reason)")
+                    if let age = UIFormatting.ageText(candidate.modifiedAtUnix) {
+                        MetaChip(text: age)
+                    }
+                }
             }
         }
         .padding(.vertical, 4)
@@ -146,17 +162,21 @@ struct ReviewCandidateRow: View {
     private var title: String {
         candidate.approved
             ? "Approved · will appear in Clean when eligible"
-            : "\(candidate.suggestedRule?.title ?? "Needs review") · \(projectName)"
+            : "\(projectName) · \(candidate.suggestedRule?.title ?? "Needs review")"
     }
 
     private var projectName: String {
-        UIFormatting.projectName(forPath: candidate.path, projectRoot: candidate.projectRoot)
+        UIFormatting.projectName(
+            forPath: candidate.path,
+            projectRoot: candidate.projectRoot,
+            workspaceRoots: model.workspaceRoots
+        )
     }
 
     private var accessibilityLabel: String {
         let type = candidate.suggestedRule?.title ?? "Review artifact"
         let state = candidate.approved ? "approved" : "needs review"
-        return "\(type), \(projectName), \(ByteFormatting.string(candidate.bytes)), \(state)"
+        return "\(projectName), \(type), \(ByteFormatting.string(candidate.bytes)), \(state)"
     }
 
     private func toggleApproval() {

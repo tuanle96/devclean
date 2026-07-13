@@ -120,6 +120,77 @@ func projectNamePrefersScannerRootOverParentDirectory() {
 }
 
 @Test
+func projectNameUsesWorkspaceRootsAndSkipsGenericMemberFolders() {
+    // The longest recognized workspace root containing the path wins.
+    #expect(
+        UIFormatting.projectName(
+            forPath: "/Users/me/Dev/BlitzStep/fastsoft-tg/services/target",
+            workspaceRoots: ["/Users/me/Dev/BlitzStep/fastsoft-tg"]
+        ) == "fastsoft-tg"
+    )
+    #expect(
+        UIFormatting.projectName(
+            forPath: "/Users/me/Dev/mono/crates/api/target",
+            workspaceRoots: ["/Users/me/Dev/mono", "/Users/me/Dev/mono/crates/api"]
+        ) == "api"
+    )
+    // Without a workspace root, one generic member level is skipped…
+    #expect(
+        UIFormatting.projectName(forPath: "/Users/me/Dev/BlitzStep/fastsoft-tg/services/target")
+            == "fastsoft-tg"
+    )
+    #expect(
+        UIFormatting.projectName(forPath: "/Users/me/Dev/VibeLab/AutoTelegram/backend/.venv")
+            == "AutoTelegram"
+    )
+    // …but a generic folder directly under a container keeps its own name.
+    #expect(
+        UIFormatting.projectName(forPath: "/Users/me/Dev/backend/target") == "backend"
+    )
+    // Non-generic parents are untouched.
+    #expect(
+        UIFormatting.projectName(forPath: "/Users/me/Dev/VibeLab/mcp-odoo/.venv") == "mcp-odoo"
+    )
+}
+
+@Test
+func scanReportDecodesWorkspaceRootsAndToleratesTheirAbsence() throws {
+    let json = #"""
+        {
+          "roots": ["/Users/me/Dev"],
+          "candidates": [],
+          "workspaces": [
+            {
+              "root": "/Users/me/Dev/BlitzStep/fastsoft-tg",
+              "kinds": ["cargo"],
+              "candidate_count": 1,
+              "total_bytes": 10,
+              "categories": {"rust-target": 10}
+            }
+          ],
+          "warnings": [],
+          "total_bytes": 0,
+          "protect_git_tracked": true
+        }
+        """#
+
+    let report = try JSONDecoder().decode(ScanReport.self, from: Data(json.utf8))
+    #expect(report.workspaces.map(\.root) == ["/Users/me/Dev/BlitzStep/fastsoft-tg"])
+
+    let withoutKey = #"""
+        {
+          "roots": [],
+          "candidates": [],
+          "warnings": [],
+          "total_bytes": 0,
+          "protect_git_tracked": true
+        }
+        """#
+    let empty = try JSONDecoder().decode(ScanReport.self, from: Data(withoutKey.utf8))
+    #expect(empty.workspaces.isEmpty)
+}
+
+@Test
 func menuBarStateSymbolsAllExistInSFSymbols() {
     // The badge family keeps one silhouette across states; a typo here would
     // silently render an empty menu bar icon, so validate against the system.
