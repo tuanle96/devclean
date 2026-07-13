@@ -1,0 +1,61 @@
+name: Release VS Code extension
+
+on:
+  push:
+    tags: ["vscode-v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Verify and package VSIX
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - name: Validate VS Code release tag and package version
+        id: version
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          version="$(../../scripts/validate-release-tag.sh vscode "$GITHUB_REF_NAME" "$package_version")"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+      - name: Package VSIX
+        run: npm run package -- --out "devclean-vscode-${{ steps.version.outputs.value }}.vsix"
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: editors/vscode/devclean-vscode-${{ steps.version.outputs.value }}.vsix
+      - uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
+        with:
+          name: DevCleaner for VS Code v${{ steps.version.outputs.value }}
+          body: |
+            ## DevCleaner for VS Code v${{ steps.version.outputs.value }}
+
+            - Shows reclaimable workspace bytes in the status bar.
+            - Scans the active workspace and opens a path-explicit HTML report.
+            - Keeps dry-run preview separate from modal-confirmed cleanup.
+            - Invokes the local `devclean` executable directly without a shell.
+
+            Install the attached VSIX with:
+
+            ```bash
+            code --install-extension devclean-vscode-${{ steps.version.outputs.value }}.vsix
+            ```
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: editors/vscode/devclean-vscode-${{ steps.version.outputs.value }}.vsix
