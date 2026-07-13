@@ -137,29 +137,24 @@ public struct SettingsView: View {
         Form {
             Section("Scan Locations") {
                 if scanLocations.isEmpty {
-                    Label("Default: ~/Dev and ~/Projects", systemImage: "folder")
+                    if autoDetectedScanLocations.isEmpty {
+                        Label("No common project folders found", systemImage: "folder.badge.questionmark")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(autoDetectedScanLocations, id: \.self) { path in
+                            scanLocationRow(path, removable: false)
+                        }
+                    }
+                    Text("Auto-detected from common development folder conventions.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(scanLocations, id: \.self) { path in
-                        HStack {
-                            Image(systemName: "folder")
-                                .foregroundStyle(.secondary)
-                                .accessibilityHidden(true)
-                            Text((path as NSString).abbreviatingWithTildeInPath)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .help(path)
-                            Spacer()
-                            Button {
-                                setScanLocations(scanLocations.filter { $0 != path })
-                            } label: {
-                                Image(systemName: "minus.circle.fill")
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel("Remove \(path)")
-                        }
+                        scanLocationRow(path, removable: true)
                     }
+                    Text("Custom locations replace automatic locations until all are removed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 HStack {
                     Button("Add Folder…") { showingFolderImporter = true }
@@ -201,7 +196,7 @@ public struct SettingsView: View {
             Section("Also Scan") {
                 Toggle("Build outputs", isOn: $buildOutputs)
                 Toggle("Test caches", isOn: $testCaches)
-                Toggle("Package and tool caches", isOn: $globalCaches)
+                Toggle("Build, package and tool caches", isOn: $globalCaches)
                 Toggle("Runtime and model caches", isOn: $expensiveCaches)
                 Text("Runtime and model caches can be expensive to download again.")
                     .font(.caption)
@@ -419,6 +414,37 @@ public struct SettingsView: View {
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    private var autoDetectedScanLocations: [String] {
+        DefaultScanLocations.detect()
+    }
+
+    private func scanLocationRow(_ path: String, removable: Bool) -> some View {
+        HStack {
+            Image(systemName: "folder")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text((path as NSString).abbreviatingWithTildeInPath)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(path)
+            Spacer()
+            if removable {
+                Button {
+                    setScanLocations(scanLocations.filter { $0 != path })
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Remove \(path)")
+            } else {
+                Image(systemName: "checkmark")
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Automatically detected")
+            }
+        }
     }
 
     private func setScanLocations(_ list: [String]) {

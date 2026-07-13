@@ -4,6 +4,20 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+### Added
+
+- Default-root discovery now checks existing `Dev`, `Developer`, `Projects`, `Code`, `src`, workspace/repository, GitHub, Android Studio, and IntelliJ project conventions without scanning the entire home directory.
+- The exact global-cache allowlist now includes Gradle caches/distributions on every platform and Xcode DerivedData on macOS.
+
+### Changed
+
+- Scan roots are canonicalized and nested or duplicate roots are collapsed before traversal.
+- macOS Settings renders the automatic locations actually present on disk, labels custom-root override semantics, and describes the expanded opt-in cache group accurately.
+
+### Security
+
+- CoreSimulator, Android SDK/AVD, JetBrains Local History, Docker Desktop storage, and the Gradle user-home root remain outside the filesystem cleanup allowlist.
+
 ## [0.6.0] - 2026-07-13
 
 ### Added

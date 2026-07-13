@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
-use std::env;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use directories::BaseDirs;
 use walkdir::WalkDir;
 
@@ -17,6 +16,7 @@ use crate::workspace;
 mod classifier;
 mod global_caches;
 mod measurement;
+mod roots;
 
 #[cfg(test)]
 use classifier::is_home_directory;
@@ -24,6 +24,8 @@ pub use classifier::{classify, classify_approved_review_candidate, matches_custo
 use classifier::{classify_review_candidate, should_prune};
 pub use global_caches::{expensive_global_cache_paths, global_cache_paths};
 use measurement::{ArtifactStats, measure_pending_artifacts};
+pub use roots::default_roots;
+use roots::normalize_roots;
 
 /// Scanner configuration.
 #[derive(Debug, Clone)]
@@ -32,7 +34,7 @@ pub struct ScanOptions {
     pub roots: Vec<PathBuf>,
     /// Artifact categories to include.
     pub categories: HashSet<Category>,
-    /// Include known global package and tool caches.
+    /// Include known global build, package, and tool caches.
     pub include_global_caches: bool,
     /// Include large runtime and model caches.
     pub include_expensive_caches: bool,
@@ -98,26 +100,6 @@ struct CandidateClassification {
 struct PendingArtifact {
     path: PathBuf,
     kind: PendingKind,
-}
-
-/// Returns useful development roots without scanning the entire home directory.
-#[must_use]
-pub fn default_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(base) = BaseDirs::new() {
-        for relative in ["Dev", "Projects"] {
-            let candidate = base.home_dir().join(relative);
-            if candidate.is_dir() {
-                roots.push(candidate);
-            }
-        }
-    }
-    if roots.is_empty() {
-        if let Ok(current) = env::current_dir() {
-            roots.push(current);
-        }
-    }
-    roots
 }
 
 /// Scans configured roots without modifying the filesystem.
@@ -246,24 +228,6 @@ fn process_pending_artifacts(
             }
         }
     }
-}
-
-fn normalize_roots(roots: &[PathBuf], warnings: &mut Vec<String>) -> Result<Vec<PathBuf>> {
-    let mut normalized = Vec::new();
-    for root in roots {
-        if !root.is_dir() {
-            warnings.push(format!("skipped missing root: {}", root.display()));
-            continue;
-        }
-        normalized.push(
-            root.canonicalize()
-                .with_context(|| format!("failed to normalize root {}", root.display()))?,
-        );
-    }
-    if normalized.is_empty() {
-        anyhow::bail!("no valid scan roots were found");
-    }
-    Ok(normalized)
 }
 
 fn scan_root(

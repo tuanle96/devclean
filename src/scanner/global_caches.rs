@@ -2,7 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Returns the exact allowlist for package and tool caches that are cheap to restore.
+/// Returns the exact allowlist for rebuildable build, package, and tool caches.
 #[must_use]
 pub fn global_cache_paths(home: &Path) -> Vec<PathBuf> {
     let mut paths = [
@@ -12,6 +12,8 @@ pub fn global_cache_paths(home: &Path) -> Vec<PathBuf> {
         ".cargo/registry/src",
         ".cargo/registry/index",
         ".cargo/git/db",
+        ".gradle/caches",
+        ".gradle/wrapper/dists",
         "go/pkg/mod",
         ".cache/uv",
         ".cache/pip",
@@ -35,6 +37,7 @@ pub fn global_cache_paths(home: &Path) -> Vec<PathBuf> {
                 "Library/pnpm",
                 "Library/Caches/ms-playwright",
                 "Library/Caches/node-gyp",
+                "Library/Developer/Xcode/DerivedData",
             ]
             .into_iter()
             .map(|relative| home.join(relative)),
@@ -107,5 +110,23 @@ mod tests {
     fn go_env_output_should_reject_empty_or_relative_path() {
         assert!(parse_go_mod_cache_output(b"\n").is_none());
         assert!(parse_go_mod_cache_output(b"relative/cache\n").is_none());
+    }
+
+    #[test]
+    fn global_cache_allowlist_should_keep_managed_storage_out() {
+        let home = env::temp_dir().join("devclean-cache-allowlist-home");
+        let paths = global_cache_paths(&home);
+
+        assert!(paths.contains(&home.join(".gradle/caches")));
+        assert!(paths.contains(&home.join(".gradle/wrapper/dists")));
+        assert!(!paths.contains(&home.join(".gradle")));
+        assert!(!paths.contains(&home.join(".android/avd")));
+        assert!(!paths.contains(&home.join("Library/Developer/CoreSimulator")));
+        assert!(!paths.contains(&home.join("Library/Android/sdk")));
+        assert!(!paths.contains(&home.join("Library/Caches/JetBrains")));
+        assert!(!paths.contains(&home.join("Library/Containers/com.docker.docker")));
+        if cfg!(target_os = "macos") {
+            assert!(paths.contains(&home.join("Library/Developer/Xcode/DerivedData")));
+        }
     }
 }

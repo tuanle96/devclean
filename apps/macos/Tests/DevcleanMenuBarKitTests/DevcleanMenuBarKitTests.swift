@@ -148,6 +148,43 @@ func scanFilterOptionsSnapLegacyValuesOntoKnownChoices() {
 }
 
 @Test
+func defaultScanLocationsDetectExistingConventionsAndExcludeManagedStorage() throws {
+    let fileManager = FileManager.default
+    let home = fileManager.temporaryDirectory
+        .appendingPathComponent("devclean-default-roots-\(UUID().uuidString)", isDirectory: true)
+    defer { try? fileManager.removeItem(at: home) }
+    for relativePath in [
+        "Dev",
+        "workspace",
+        "Documents/GitHub",
+        "Library/Developer/CoreSimulator",
+    ] {
+        try fileManager.createDirectory(
+            at: home.appendingPathComponent(relativePath, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+    try fileManager.createSymbolicLink(
+        at: home.appendingPathComponent("GitHub", isDirectory: true),
+        withDestinationURL: home.appendingPathComponent("Dev", isDirectory: true)
+    )
+
+    let locations = DefaultScanLocations.detect(
+        homeDirectory: home,
+        fileManager: fileManager
+    )
+
+    #expect(
+        locations == [
+            home.appendingPathComponent("Dev", isDirectory: true).path,
+            home.appendingPathComponent("workspace", isDirectory: true).path,
+            home.appendingPathComponent("Documents/GitHub", isDirectory: true).path,
+        ]
+    )
+    #expect(!locations.contains(where: { $0.contains("CoreSimulator") }))
+}
+
+@Test
 func aiReviewFactsOmitFullPathsAndKeepDeterministicMetadata() throws {
     let candidate = try decodeReviewCandidate()
     let fact = AIReviewFact(
