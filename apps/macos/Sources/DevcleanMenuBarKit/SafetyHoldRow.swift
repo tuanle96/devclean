@@ -4,6 +4,9 @@ import SwiftUI
 /// A single safety-hold row with keyboard, VoiceOver, and context-menu actions.
 struct SafetyHoldRow: View {
     let entry: QuarantineEntry
+    /// Owning project resolved by the caller; nil for global caches, where the
+    /// category itself is the clearest title.
+    let projectName: String?
     let isBusy: Bool
     let onRestore: () -> Void
     let onDelete: () -> Void
@@ -17,10 +20,11 @@ struct SafetyHoldRow: View {
                 .frame(width: 18)
                 .foregroundStyle(.teal)
                 .accessibilityHidden(true)
+                .help(entry.category.title)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(titleText)
-                        .font(.subheadline)
+                        .font(.subheadline.weight(.medium))
                         .lineLimit(1)
                     Spacer()
                     Text(ByteFormatting.string(entry.bytes))
@@ -34,26 +38,24 @@ struct SafetyHoldRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(entry.originalPath)
-                    Text("·").font(.caption2).foregroundStyle(.tertiary)
-                        .accessibilityHidden(true)
-                    Text(UIFormatting.expiryText(entry.expiresAtUnix))
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(UIFormatting.expiryColor(entry.expiresAtUnix))
-                        .fixedSize()
+                    MetaChip(
+                        text: UIFormatting.expiryText(entry.expiresAtUnix),
+                        tint: UIFormatting.expiryColor(entry.expiresAtUnix)
+                    )
                     Spacer(minLength: 4)
                     Button(action: onRestore) { Image(systemName: "arrow.uturn.backward") }
                         .buttonStyle(.borderless)
                         .controlSize(.small)
                         .disabled(isBusy)
                         .help("Restore to original path")
-                        .accessibilityLabel("Restore \(entry.category.title)")
+                        .accessibilityLabel("Restore \(titleText)")
                         .accessibilityIdentifier("hold-restore-\(entry.id)")
                     Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }
                         .buttonStyle(.borderless)
                         .controlSize(.small)
                         .disabled(isBusy)
                         .help("Permanently delete now")
-                        .accessibilityLabel("Permanently delete \(entry.category.title)")
+                        .accessibilityLabel("Permanently delete \(titleText)")
                         .accessibilityIdentifier("hold-delete-\(entry.id)")
                 }
                 .opacity(isHovering ? 1 : 0.55)
@@ -70,20 +72,22 @@ struct SafetyHoldRow: View {
             Button("Permanently Delete Now…", role: .destructive, action: onDelete)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "\(titleText), \(ByteFormatting.string(entry.bytes)), safety hold, \(UIFormatting.expiryText(entry.expiresAtUnix))"
-        )
+        .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(entry.originalPath)
     }
 
-    /// Global caches live under ~/Library or dot-folders, where the parent
-    /// directory name is noise rather than a project.
     private var titleText: String {
-        switch entry.category {
-        case .globalCache, .expensiveGlobalCache:
-            entry.category.title
-        default:
-            "\(entry.category.title) · \(UIFormatting.projectName(forPath: entry.originalPath))"
+        projectName ?? entry.category.title
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [titleText]
+        if titleText != entry.category.title {
+            parts.append(entry.category.title)
         }
+        parts.append(ByteFormatting.string(entry.bytes))
+        parts.append("safety hold")
+        parts.append(UIFormatting.expiryText(entry.expiresAtUnix))
+        return parts.joined(separator: ", ")
     }
 }

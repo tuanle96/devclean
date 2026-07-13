@@ -414,12 +414,27 @@ extension MenuContentView {
     func safetyHoldRow(_ entry: QuarantineEntry) -> some View {
         SafetyHoldRow(
             entry: entry,
+            projectName: holdProjectName(entry),
             isBusy: model.isBusy,
             onRestore: { model.restoreSafetyHold(entry) },
             onDelete: { holdPurgeRequest = .one(entry) },
             onReveal: { FinderActions.revealInFinder(entry.originalPath) },
             onCopyPath: { FinderActions.copyPath(entry.originalPath) }
         )
+    }
+
+    /// Global caches keep their category as the title; everything else is named
+    /// by its owning project.
+    func holdProjectName(_ entry: QuarantineEntry) -> String? {
+        switch entry.category {
+        case .globalCache, .expensiveGlobalCache:
+            nil
+        default:
+            UIFormatting.projectName(
+                forPath: entry.originalPath,
+                workspaceRoots: model.workspaceRoots
+            )
+        }
     }
 
     @ViewBuilder

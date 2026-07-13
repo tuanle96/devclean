@@ -43,14 +43,70 @@ enum UIFormatting {
         return "built " + relativePast(modifiedAtUnix, now: now)
     }
 
-    /// Name of the project folder that owns an artifact ("Rust target · VibeTG").
-    /// Uses the scanner-provided project root when available, otherwise the
-    /// artifact's parent directory.
-    static func projectName(forPath path: String, projectRoot: String? = nil) -> String {
+    /// Directory names that describe a role inside a project rather than the
+    /// project itself — "services/target" belongs to the folder above
+    /// "services", not to "services".
+    private static let genericProjectDirectories: Set<String> = [
+        "services", "service", "backend", "frontend", "packages", "apps",
+        "libs", "modules", "crates", "server", "client", "ios", "android", "src",
+    ]
+
+    /// Top-level container folders that are never a project name themselves,
+    /// so a generic member directly under one keeps its own name.
+    private static let containerDirectories: Set<String> = [
+        "dev", "projects", "code", "repos", "work", "sites",
+    ]
+
+    /// Name of the project that owns an artifact, best source first: the
+    /// scanner-provided review root, then a recognized workspace root
+    /// containing the path, then the parent directory — skipping one generic
+    /// member folder ("services", "backend", …) when a real owner sits above.
+    static func projectName(
+        forPath path: String,
+        projectRoot: String? = nil,
+        workspaceRoots: [String] = []
+    ) -> String {
         if let projectRoot, !projectRoot.isEmpty {
             return URL(fileURLWithPath: projectRoot).lastPathComponent
         }
-        return URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
+        let containingWorkspaces = workspaceRoots.filter {
+            path == $0 || path.hasPrefix($0 + "/")
+        }
+        if let workspace = containingWorkspaces.max(by: { $0.count < $1.count }) {
+            return URL(fileURLWithPath: workspace).lastPathComponent
+        }
+        let parent = URL(fileURLWithPath: path).deletingLastPathComponent()
+        let parentName = parent.lastPathComponent
+        // ponytail: skip a single generic level; deeper monorepo nesting is the
+        // workspace roots' job.
+        if genericProjectDirectories.contains(parentName.lowercased()) {
+            let grandparent = parent.deletingLastPathComponent()
+            let grandparentName = grandparent.lastPathComponent
+            let isContainer =
+                containerDirectories.contains(grandparentName.lowercased())
+                || grandparent.path == "/"
+                || grandparent.path == FileManager.default.homeDirectoryForCurrentUser.path
+            if !isContainer, !grandparentName.isEmpty {
+                return grandparentName
+            }
+        }
+        return parentName
+    }
+}
+
+/// Small capsule for row metadata like artifact age or hold expiry.
+struct MetaChip: View {
+    let text: String
+    var tint: Color = .secondary
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(.quaternary.opacity(0.6), in: Capsule())
+            .fixedSize()
     }
 }
 
