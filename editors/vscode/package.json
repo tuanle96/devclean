@@ -5,16 +5,56 @@
   "version": "0.1.0",
   "publisher": "tuanle96",
   "license": "MIT",
-  "engines": { "vscode": "^1.95.0" },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "pricing": "Free",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tuanle96/devclean.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://github.com/tuanle96/devclean#vs-code-extension",
+  "bugs": {
+    "url": "https://github.com/tuanle96/devclean/issues"
+  },
+  "keywords": [
+    "cleanup",
+    "disk",
+    "developer-tools",
+    "cache"
+  ],
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "DevCleaner scans workspace files and can run explicitly confirmed cleanup."
+    }
+  },
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
-      { "command": "devclean.scan", "title": "DevCleaner: Scan Workspace" },
-      { "command": "devclean.openReport", "title": "DevCleaner: Open HTML Report" },
-      { "command": "devclean.dryRun", "title": "DevCleaner: Preview Cleanup" },
-      { "command": "devclean.clean", "title": "DevCleaner: Clean After Confirmation" }
+      {
+        "command": "devclean.scan",
+        "title": "DevCleaner: Scan Workspace"
+      },
+      {
+        "command": "devclean.openReport",
+        "title": "DevCleaner: Open HTML Report"
+      },
+      {
+        "command": "devclean.dryRun",
+        "title": "DevCleaner: Preview Cleanup"
+      },
+      {
+        "command": "devclean.clean",
+        "title": "DevCleaner: Clean After Confirmation"
+      }
     ],
     "configuration": {
       "title": "DevCleaner",
@@ -38,13 +78,16 @@
     }
   },
   "scripts": {
+    "vscode:prepublish": "npm run build",
     "build": "tsc -p .",
     "check": "tsc -p . --noEmit",
-    "test": "npm run build && node --test dist/commands.test.js"
+    "test": "npm run build && node --test dist/commands.test.js",
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "22.15.3",
     "@types/vscode": "1.95.0",
+    "@vscode/vsce": "^3.9.2",
     "typescript": "5.7.3"
   }
 }

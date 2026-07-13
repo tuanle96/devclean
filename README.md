@@ -204,6 +204,8 @@ Local source builds are ad-hoc signed unless `CODE_SIGN_IDENTITY` is provided. P
 
 The source extension in [`editors/vscode`](editors/vscode) shows reclaimable workspace bytes in the status bar, opens a privacy-explicit HTML report, and keeps preview separate from cleanup. Cleanup always requires a modal confirmation and invokes `devclean` directly without a shell.
 
+Download the source-traceable VSIX from the [`vscode-v0.1.0` release](https://github.com/tuanle96/devclean/releases/tag/vscode-v0.1.0), then install it with `code --install-extension devclean-vscode-0.1.0.vsix`. Marketplace publication uses the same package once the `tuanle96` publisher credential is configured.
+
 ```bash
 cd editors/vscode
 npm ci

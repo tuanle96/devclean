@@ -81,6 +81,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run check
+      - run: npm run package -- --out /tmp/devclean.vsix
 
   msrv:
     name: MSRV (1.85)
