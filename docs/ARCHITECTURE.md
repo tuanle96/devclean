@@ -7,13 +7,14 @@
 - `config.rs`: strict TOML loading and human duration/size parsing.
 - `model.rs`: serializable categories, candidates, reports, and render options.
 - `policy.rs`: compiled excludes and the Git tracked-file guard.
-- `scanner.rs`: bounded traversal, classification, age/size filtering, platform cache allowlists, and allocated-size measurement.
+- `scanner.rs` and `scanner/`: bounded traversal, evidence-based classification, age/size filtering, platform cache allowlists, and allocated-size measurement.
 - `cleaner.rs`: containment/category/Git revalidation and quarantine-based deletion.
 - `quarantine.rs`: locked, private registry for persistent safety holds, restore, and expiry purge.
 - `docker.rs`: detailed usage, build-cache prune, and volume-preserving system prune.
 - `render.rs`: terminal, JSON, JSONL, redacted, and standalone HTML reports.
-- `main.rs`: CLI orchestration, candidate selection, target-free planning, confirmation, completions, and manpage generation.
-- `apps/macos`: SwiftUI `MenuBarExtra`, six-hour background observations, local learning state, structured diagnostics, opt-in Sentry provider, and direct process execution of the bundled Rust helper.
+- `history.rs`: versioned, aggregate-only SQLite scan and cleanup history with transactional migrations.
+- `cli/`: focused scan, clean, quarantine, doctor, scheduler, watch, TUI, stats, config, completion, and manpage orchestration; `main.rs` only enters the CLI.
+- `apps/macos`: SwiftUI `MenuBarExtra` with menu content split by modal, AI, cleanup-confirmation, section, and action concerns; six-hour background observations, local learning state, structured diagnostics, opt-in Sentry provider, and direct process execution of the bundled Rust helper.
 
 ## Cleanup lifecycle
 
@@ -47,7 +48,7 @@ On Unix, allocated blocks are counted and hard-linked inodes are deduplicated. O
 
 ## Adding a category
 
-1. Define a narrow evidence rule in `scanner.rs`.
+1. Define a narrow evidence rule in `scanner/classifier.rs`.
 2. Decide whether the category belongs in conservative defaults.
 3. Add positive, lookalike, protected-path, Git-tracked, and symlink tests.
 4. Decide whether redownload/rebuild cost requires a separate opt-in.

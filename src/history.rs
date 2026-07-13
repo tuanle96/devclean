@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use directories::BaseDirs;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -12,6 +12,8 @@ use serde::Serialize;
 use crate::cleaner::CleanReport;
 use crate::model::{Category, ScanReport};
 use crate::scanner::totals_by_category;
+
+const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HistorySummary {
@@ -122,16 +124,41 @@ fn open(path: Option<&Path>) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let connection = Connection::open(&path)
+    let mut connection = Connection::open(&path)
         .with_context(|| format!("failed to open history database {}", path.display()))?;
-    connection.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         CREATE TABLE IF NOT EXISTS scan_events(id INTEGER PRIMARY KEY,at_unix INTEGER NOT NULL,total_bytes INTEGER NOT NULL,candidate_count INTEGER NOT NULL,categories_json TEXT NOT NULL);
+    connection.execute_batch("PRAGMA journal_mode=WAL;")?;
+    migrate(&mut connection)?;
+    Ok(connection)
+}
+
+fn migrate(connection: &mut Connection) -> Result<()> {
+    let version = schema_version(connection)?;
+    ensure!(
+        version <= CURRENT_SCHEMA_VERSION,
+        "history database schema version {version} is newer than supported version {CURRENT_SCHEMA_VERSION}"
+    );
+
+    if version == 0 {
+        migrate_v0_to_v1(connection)?;
+    }
+    Ok(())
+}
+
+fn migrate_v0_to_v1(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS scan_events(id INTEGER PRIMARY KEY,at_unix INTEGER NOT NULL,total_bytes INTEGER NOT NULL,candidate_count INTEGER NOT NULL,categories_json TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS scan_events_at ON scan_events(at_unix);
          CREATE TABLE IF NOT EXISTS cleanup_events(id INTEGER PRIMARY KEY,at_unix INTEGER NOT NULL,removed_bytes INTEGER NOT NULL,quarantined_bytes INTEGER NOT NULL,removed_count INTEGER NOT NULL,held_count INTEGER NOT NULL,failures INTEGER NOT NULL);
-         CREATE INDEX IF NOT EXISTS cleanup_events_at ON cleanup_events(at_unix);",
+         CREATE INDEX IF NOT EXISTS cleanup_events_at ON cleanup_events(at_unix);
+         PRAGMA user_version=1;",
     )?;
-    Ok(connection)
+    transaction.commit()?;
+    Ok(())
+}
+
+fn schema_version(connection: &Connection) -> Result<u32> {
+    Ok(connection.pragma_query_value(None, "user_version", |row| row.get(0))?)
 }
 
 fn scan_snapshot(
@@ -250,6 +277,41 @@ mod tests {
             !raw.windows(b"private/node_modules".len())
                 .any(|window| window == b"private/node_modules")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_unversioned_database_should_migrate_without_losing_history() -> Result<()> {
+        let temporary = tempdir()?;
+        let database = temporary.path().join("history.sqlite3");
+        let legacy = Connection::open(&database)?;
+        legacy.execute_batch(
+            "CREATE TABLE scan_events(id INTEGER PRIMARY KEY,at_unix INTEGER NOT NULL,total_bytes INTEGER NOT NULL,candidate_count INTEGER NOT NULL,categories_json TEXT NOT NULL);
+             CREATE TABLE cleanup_events(id INTEGER PRIMARY KEY,at_unix INTEGER NOT NULL,removed_bytes INTEGER NOT NULL,quarantined_bytes INTEGER NOT NULL,removed_count INTEGER NOT NULL,held_count INTEGER NOT NULL,failures INTEGER NOT NULL);
+             INSERT INTO scan_events(at_unix,total_bytes,candidate_count,categories_json) VALUES (0,4096,1,'{}');",
+        )?;
+        drop(legacy);
+
+        let summary = summarize(u64::MAX / 86_400, Some(&database))?;
+        let migrated = Connection::open(&database)?;
+
+        assert_eq!(summary.scan_count, 1);
+        assert_eq!(summary.latest_reclaimable_bytes, 4096);
+        assert_eq!(schema_version(&migrated)?, CURRENT_SCHEMA_VERSION);
+        Ok(())
+    }
+
+    #[test]
+    fn newer_history_schema_should_be_rejected() -> Result<()> {
+        let temporary = tempdir()?;
+        let database = temporary.path().join("history.sqlite3");
+        let connection = Connection::open(&database)?;
+        connection.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION + 1)?;
+        drop(connection);
+
+        let error = summarize(30, Some(&database)).expect_err("newer schema must be rejected");
+
+        assert!(error.to_string().contains("newer than supported"));
         Ok(())
     }
 }
