@@ -40,6 +40,12 @@ Changes must preserve these invariants:
 
 Read [docs/SAFETY.md](docs/SAFETY.md) before changing discovery or deletion behavior.
 
+## Release tags
+
+- Core CLI and macOS releases use exact `vMAJOR.MINOR.PATCH` tags.
+- VS Code extension releases use exact `vscode-vMAJOR.MINOR.PATCH` tags, and the tag version must match `editors/vscode/package.json`.
+- Do not reuse one channel's tag prefix for another channel. Release workflows validate the tag again before building or publishing artifacts.
+
 ## Commits and pull requests
 
 - Use concise Conventional Commit messages, such as `feat(scanner): detect pnpm cache`.
