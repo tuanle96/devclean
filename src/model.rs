@@ -211,6 +211,9 @@ pub struct ScanReport {
     /// Local measurements used for growth history, including active artifacts filtered from cleanup.
     #[serde(default)]
     pub learning_observations: Vec<LearningObservation>,
+    /// Rebuildable candidates grouped under recognized Cargo, npm, and Nx workspace roots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspaces: Vec<crate::workspace::WorkspaceSummary>,
     /// Non-fatal traversal or metadata errors.
     pub warnings: Vec<String>,
     /// Total estimated allocated bytes for all candidates.

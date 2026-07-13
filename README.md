@@ -69,6 +69,9 @@ devclean schedule install --every 7d --older-than 30d --min-size 1GiB --all --ye
 
 # Inspect aggregate local history (candidate paths are never stored)
 devclean stats --days 30 --format html --output devclean-stats.html
+
+# Correlate the current read-only scan with local aggregate history
+devclean analyze --days 30 --stale-after-days 60 --redact-paths
 ```
 
 Run `devclean doctor` to inspect roots, config search paths, tools, and active safety guarantees.
@@ -85,7 +88,7 @@ Run `devclean doctor` to inspect roots, config search paths, tools, and active s
 | Build/test output | No | `--all` | Recognized manifest plus exact generated name |
 | Gradle/CMake/Zig output | No | `--all` | Direct build manifest plus `build`, `.zig-cache`, `zig-cache`, or `zig-out` |
 | Ambiguous cache-like output | Never | `--learning` observes only | Project marker plus names such as `dist`, `out`, `.cache`, or `coverage` |
-| Package/tool cache | No | `--global-caches` | Exact platform-aware allowlist |
+| Package/tool cache | No | `--global-caches` | Exact platform-aware allowlist; Go module cache honors `GOMODCACHE` or `go env GOMODCACHE` |
 | Model/runtime cache | No | `--expensive-caches` | Separate allowlist because redownload cost is high |
 | Docker build cache | No | `--docker` | `docker builder prune`, never volumes |
 | Docker system data | No | `--docker-system` | Stopped containers, unused images/networks/cache; never volumes |
@@ -145,9 +148,10 @@ devclean scan --format json --redact-paths
 devclean scan --format jsonl --redact-paths
 devclean scan --format html --output report.html --redact-paths
 devclean stats --days 30 --format json
+devclean analyze --days 30 --format json --redact-paths
 ```
 
-HTML and JSON can contain private absolute paths unless `--redact-paths` is used. JSONL emits safe candidates, review-only observations, Learning Mode observations, then a summary event.
+HTML and JSON can contain private absolute paths unless `--redact-paths` is used. JSONL emits safe candidates, review-only observations, Learning Mode observations, then a summary event. Scan reports also group candidates under the nearest Cargo, npm-workspaces, or Nx root. `analyze` combines the current scan with aggregate-only SQLite history to flag stale categories, repeated category growth, cleanup failures, and workspace concentration without persisting candidate paths.
 
 Generate shell integrations without extra packages:
 

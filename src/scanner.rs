@@ -12,6 +12,7 @@ use crate::model::{
     ScanReport,
 };
 use crate::policy::{ExcludePolicy, GitTrackedGuard};
+use crate::workspace;
 
 mod classifier;
 mod global_caches;
@@ -213,12 +214,14 @@ pub fn scan(options: &ScanOptions) -> Result<ScanReport> {
         .iter()
         .map(|observation| observation.bytes)
         .fold(0_u64, u64::saturating_add);
+    let workspaces = workspace::summarize(&output.candidates);
 
     Ok(ScanReport {
         roots: normalized_roots,
         candidates: output.candidates,
         review_candidates: output.review_candidates,
         learning_observations: output.learning_observations,
+        workspaces,
         warnings: output.warnings,
         total_bytes,
         review_total_bytes,

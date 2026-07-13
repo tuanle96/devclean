@@ -12,6 +12,7 @@ use devclean::{
     default_roots, parse_age, parse_bytes, render_with_options,
 };
 
+mod analyze;
 mod clean;
 mod config_command;
 mod doctor;
@@ -41,6 +42,8 @@ enum Commands {
     Init(init::Args),
     /// Fetch and validate a shared configuration from a Git repository.
     Config(config_command::Args),
+    /// Correlate the current scan with local aggregate history for actionable suggestions.
+    Analyze(analyze::Args),
     /// Show local scan growth and cleanup history.
     Stats(stats::Args),
     /// Install, inspect, or remove recurring cleanup jobs.
@@ -150,6 +153,7 @@ pub fn run() -> Result<()> {
     match Cli::parse().command {
         Commands::Init(arguments) => init::run(&arguments),
         Commands::Config(arguments) => config_command::run(&arguments),
+        Commands::Analyze(arguments) => analyze::run(&arguments),
         Commands::Stats(arguments) => stats::run(&arguments),
         Commands::Schedule(arguments) => schedule::run(&arguments),
         Commands::Tui(arguments) => tui::run(&arguments),
@@ -300,7 +304,9 @@ fn history_database_override() -> Option<PathBuf> {
 }
 
 fn history_recording_enabled() -> bool {
-    !cfg!(debug_assertions) || env::var_os("DEVCLEAN_HISTORY_IN_DEBUG").is_some()
+    !cfg!(debug_assertions)
+        || env::var_os("DEVCLEAN_HISTORY_IN_DEBUG").is_some()
+        || history_database_override().is_some()
 }
 
 fn record_scan_history(report: &ScanReport) {

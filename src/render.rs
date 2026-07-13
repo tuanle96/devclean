@@ -104,6 +104,24 @@ fn render_table(report: &ScanReport) -> String {
             human_bytes(report.review_total_bytes)
         );
     }
+    if !report.workspaces.is_empty() {
+        let _ = writeln!(output, "workspaces:");
+        for workspace in &report.workspaces {
+            let kinds = workspace
+                .kinds
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("+");
+            let _ = writeln!(
+                output,
+                "  {kinds:<12} {:>12}  {} candidates  {}",
+                human_bytes(workspace.total_bytes),
+                workspace.candidate_count,
+                workspace.root.display()
+            );
+        }
+    }
     for warning in &report.warnings {
         let _ = writeln!(output, "warning: {warning}");
     }
@@ -145,8 +163,9 @@ fn render_jsonl(report: &ScanReport) -> Result<String> {
             "review_candidate_count": report.review_candidates.len(),
             "review_total_bytes": report.review_total_bytes,
             "learning_observation_count": report.learning_observations.len(),
-            "observed_total_bytes": report.observed_total_bytes,
-            "warnings": report.warnings,
+              "observed_total_bytes": report.observed_total_bytes,
+              "workspace_count": report.workspaces.len(),
+              "warnings": report.warnings,
         }))?
     )?;
     Ok(output)
@@ -165,6 +184,14 @@ struct HtmlRow {
     size: String,
     age: String,
     evidence: String,
+}
+
+#[derive(Serialize)]
+struct HtmlWorkspace {
+    kinds: String,
+    root: String,
+    candidate_count: usize,
+    bytes: String,
 }
 
 fn render_html(report: &ScanReport) -> Result<String> {
@@ -193,6 +220,21 @@ fn render_html(report: &ScanReport) -> Result<String> {
         age: human_age(candidate.modified_at_unix),
         evidence: candidate.reason.clone(),
     }));
+    let workspaces = report
+        .workspaces
+        .iter()
+        .map(|workspace| HtmlWorkspace {
+            kinds: workspace
+                .kinds
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" + "),
+            root: workspace.root.to_string_lossy().into_owned(),
+            candidate_count: workspace.candidate_count,
+            bytes: human_bytes(workspace.total_bytes),
+        })
+        .collect::<Vec<_>>();
 
     let mut environment = Environment::new();
     environment.add_template("report.html", include_str!("../templates/scan-report.html"))?;
@@ -202,8 +244,9 @@ fn render_html(report: &ScanReport) -> Result<String> {
         review_total_bytes => human_bytes(report.review_total_bytes),
         review_candidate_count => report.review_candidates.len(),
         cards,
-        rows,
-        warnings => &report.warnings,
+          rows,
+          workspaces,
+          warnings => &report.warnings,
     })?)
 }
 
@@ -221,6 +264,9 @@ fn redact_report(report: &ScanReport) -> ScanReport {
     }
     for observation in &mut redacted.learning_observations {
         observation.path = redact_path(&observation.path, &report.roots);
+    }
+    for workspace in &mut redacted.workspaces {
+        workspace.root = redact_path(&workspace.root, &report.roots);
     }
     redacted.roots = report
         .roots
@@ -286,6 +332,7 @@ fn human_age(modified_at_unix: Option<u64>) -> String {
 mod tests {
     use super::*;
     use crate::model::{Candidate, Category, Confidence, ReviewCandidate, ReviewRule, ScanReport};
+    use crate::workspace::{WorkspaceKind, WorkspaceSummary};
 
     fn report(path: &str) -> ScanReport {
         ScanReport {
@@ -302,6 +349,7 @@ mod tests {
             }],
             review_candidates: Vec::new(),
             learning_observations: Vec::new(),
+            workspaces: Vec::new(),
             warnings: Vec::new(),
             total_bytes: 1024,
             review_total_bytes: 0,
@@ -337,6 +385,28 @@ mod tests {
         )?;
 
         assert!(!output.contains("/private/project"));
+        Ok(())
+    }
+
+    #[test]
+    fn render_should_redact_workspace_roots_in_json() -> Result<()> {
+        let mut input = report("/private/project/node_modules");
+        input.workspaces.push(WorkspaceSummary {
+            root: PathBuf::from("/private/project"),
+            kinds: vec![WorkspaceKind::Npm],
+            candidate_count: 1,
+            total_bytes: 1024,
+            categories: std::collections::BTreeMap::from([(Category::NodeModules, 1024)]),
+        });
+
+        let output = render_with_options(
+            &input,
+            OutputFormat::Json,
+            RenderOptions { redact_paths: true },
+        )?;
+
+        assert!(!output.contains("/private/project"));
+        assert!(output.contains("<root:1>"));
         Ok(())
     }
 

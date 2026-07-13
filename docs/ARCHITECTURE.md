@@ -12,8 +12,10 @@
 - `quarantine.rs`: locked, private registry for persistent safety holds, restore, and expiry purge.
 - `docker.rs`: detailed usage, build-cache prune, and volume-preserving system prune.
 - `render.rs`: terminal, JSON, JSONL, redacted, and standalone HTML reports.
-- `history.rs`: versioned, aggregate-only SQLite scan and cleanup history with transactional migrations.
-- `cli/`: focused scan, clean, quarantine, doctor, scheduler, watch, TUI, stats, config, completion, and manpage orchestration; `main.rs` only enters the CLI.
+- `history.rs`: versioned, aggregate-only SQLite scan and cleanup history with transactional migrations and path-free category growth events.
+- `analysis.rs`: deterministic local heuristics that correlate the current scan with aggregate history; insights never contain candidate paths.
+- `workspace.rs`: nearest-root Cargo, npm-workspaces, and Nx detection plus candidate grouping.
+- `cli/`: focused scan, analyze, clean, quarantine, doctor, scheduler, watch, TUI, stats, config, completion, and manpage orchestration; `main.rs` only enters the CLI.
 - `apps/macos`: SwiftUI `MenuBarExtra` with menu content split by modal, AI, cleanup-confirmation, section, and action concerns; six-hour background observations, local learning state, structured diagnostics, opt-in Sentry provider, and direct process execution of the bundled Rust helper.
 
 ## Cleanup lifecycle
@@ -39,6 +41,8 @@ With `--quarantine-for`, the same validated rename becomes a persistent adjacent
 The macOS app is an unprivileged presentation client. It parses `scan --format json`, lets the user select candidates, then invokes `clean --only-path ... --yes`. The Rust process repeats discovery and refuses the whole selection if any requested path is stale or no longer eligible. Swift never invokes a shell or performs filesystem deletion.
 
 Learning Mode emits `learning_observations` independently of cleanup age/category filters. Known artifacts receive safe or protected confidence; unknown cache-like directories beneath recognized projects receive review confidence. Only `candidates` can be passed to cleanup. Swift stores at most 30 days/256 snapshots locally and sends only aggregate buckets to monitoring providers.
+
+Workspace detection is presentation metadata, not cleanup authority. A candidate is grouped under the nearest ancestor containing a Cargo `[workspace]`, npm-compatible `workspaces`, or `nx.json` marker. Cleanup still revalidates each exact candidate independently. `analyze` uses these groups, candidate modification times, and aggregate history growth events to produce suggestions; it never promotes review-only observations or bypasses cleanup confirmation.
 
 ## Size and age accounting
 

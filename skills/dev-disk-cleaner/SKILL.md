@@ -37,6 +37,8 @@ For a multi-day evaluation, run `scan --learning --format json`. Known active ar
 
 For continuous read-only monitoring, run `watch --threshold 5GiB --interval 1h`. Watch mode may notify, but it never cleans automatically. Use `--once --no-notify` for scheduled verification jobs that should print one threshold check and exit.
 
+Use `analyze --days 30 --stale-after-days 60 --redact-paths` for deterministic local suggestions. It correlates the current scan with aggregate history, reports repeated category growth and workspace concentration, and does not grant cleanup authority. Workspace summaries recognize Cargo, npm workspaces, and Nx roots; candidate paths are still never persisted in SQLite.
+
 ## Cleanup profiles
 
 Use conservative cleanup for Rust targets, JavaScript dependencies, and framework caches:

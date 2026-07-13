@@ -71,6 +71,9 @@ fn render_table(summary: &HistorySummary) -> String {
     for (category, bytes) in &summary.category_change_bytes {
         let _ = writeln!(output, "{category}: {}", signed_bytes(*bytes));
     }
+    for (category, events) in &summary.category_growth_events {
+        let _ = writeln!(output, "{category} growth events: {events}");
+    }
     output
 }
 

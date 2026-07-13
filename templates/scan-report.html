@@ -16,8 +16,9 @@
   <p class="review"><strong>{{ review_total_bytes }}</strong> across {{ review_candidate_count }} review-only observations</p>
   <section class="summary">
   {% for card in cards %}<article><span>{{ card.category }}</span><strong>{{ card.bytes }}</strong></article>{% endfor %}
-  </section>
-  <div class="table"><table><thead><tr><th>Category</th><th>Path</th><th>Size</th><th>Age</th><th>Evidence</th></tr></thead><tbody>
+    </section>
+    {% if workspaces %}<section><h2>Workspaces</h2><ul>{% for workspace in workspaces %}<li><strong>{{ workspace.kinds }}</strong> · {{ workspace.bytes }} across {{ workspace.candidate_count }} candidates · <code>{{ workspace.root }}</code></li>{% endfor %}</ul></section>{% endif %}
+    <div class="table"><table><thead><tr><th>Category</th><th>Path</th><th>Size</th><th>Age</th><th>Evidence</th></tr></thead><tbody>
   {% for row in rows %}<tr><td>{{ row.category }}</td><td><code>{{ row.path }}</code></td><td>{{ row.size }}</td><td>{{ row.age }}</td><td>{{ row.evidence }}</td></tr>{% endfor %}
   </tbody></table></div>
   <section class="warnings"><h2>Warnings</h2><ul>{% for warning in warnings %}<li>{{ warning }}</li>{% endfor %}</ul></section>

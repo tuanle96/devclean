@@ -4,10 +4,17 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+### Added
+
+- `devclean analyze` correlates a current read-only scan with aggregate local history to report stale categories, repeated growth, cleanup failures, and workspace concentration in table or JSON form.
+- Cargo, npm-workspaces, and Nx detection groups scan candidates under their nearest monorepo root and exposes additive workspace summaries in scan reports.
+- Global-cache discovery falls back to `go env GOMODCACHE` when `GOMODCACHE` is not set, accepting only absolute paths.
+
 ### Changed
 
 - Split scanner classification, core CLI subcommands, and the macOS menu content into focused modules without changing cleanup authority or public commands.
 - Version the local SQLite history schema with transactional `PRAGMA user_version` migrations; legacy unversioned databases upgrade in place and newer unsupported schemas are rejected.
+- Replace the internal free-form SQL sort direction with a closed enum and derive repeated category-growth counts from path-free history snapshots.
 
 ## [0.5.0] - 2026-07-13
 
