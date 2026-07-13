@@ -93,7 +93,8 @@ func capacityBarBuildsHonestDiskSegments() {
     #expect(byID["other"] == 20)  // total - free - held - reclaimable
     #expect(byID["free"] == 50)
     // Every slice sums back to the total capacity — an honest bar.
-    #expect((byID["reclaimable"] ?? 0) + (byID["held"] ?? 0) + (byID["other"] ?? 0) + (byID["free"] ?? 0) == 100)
+    let totalBytes = byID.values.reduce(0, +)
+    #expect(totalBytes == 100)
     // Zero-byte slices are dropped, and missing totals disable the bar entirely.
     #expect(CapacityBar.segments(total: 100, free: 100, held: 0, reclaimable: 0)?.count == 1)
     #expect(CapacityBar.segments(total: nil, free: 50, held: 0, reclaimable: 0) == nil)
