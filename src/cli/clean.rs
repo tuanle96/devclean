@@ -428,6 +428,7 @@ mod tests {
             candidates: Vec::new(),
             review_candidates: Vec::new(),
             learning_observations: Vec::new(),
+            workspaces: Vec::new(),
             warnings: Vec::new(),
             total_bytes: 0,
             review_total_bytes: 0,

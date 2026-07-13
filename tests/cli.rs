@@ -22,6 +22,69 @@ fn scan_should_emit_redacted_json() -> Result<()> {
 }
 
 #[test]
+fn analyze_should_group_monorepo_candidates_and_redact_workspace_root() -> Result<()> {
+    let temporary = tempdir()?;
+    let database = temporary.path().join("history.sqlite3");
+    fs::write(
+        temporary.path().join("package.json"),
+        r#"{"workspaces":["packages/*"]}"#,
+    )?;
+    let first = temporary.path().join("packages/first/node_modules");
+    let second = temporary.path().join("packages/second/node_modules");
+    fs::create_dir_all(&first)?;
+    fs::create_dir_all(&second)?;
+    fs::write(first.join("dependency.js"), "generated")?;
+    fs::write(second.join("dependency.js"), "generated")?;
+
+    let output = cargo_bin_cmd!("devclean")
+        .arg("analyze")
+        .args(["--format", "json", "--redact-paths"])
+        .arg(temporary.path())
+        .env("DEVCLEAN_HISTORY_DB", &database)
+        .output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+
+    assert!(output.status.success());
+    assert!(stdout.contains(r#""kind": "workspace-concentration""#));
+    assert!(stdout.contains(r#""root": "<workspace:1>""#));
+    assert!(!stdout.contains(&temporary.path().to_string_lossy().into_owned()));
+    assert!(first.is_dir() && second.is_dir());
+    Ok(())
+}
+
+#[test]
+fn analyze_should_detect_repeated_aggregate_growth_without_cleaning() -> Result<()> {
+    let temporary = tempdir()?;
+    let database = temporary.path().join("history.sqlite3");
+    let modules = temporary.path().join("project/node_modules");
+    fs::create_dir_all(&modules)?;
+    let payload = modules.join("cache.bin");
+    fs::write(&payload, vec![0_u8; 4096])?;
+
+    cargo_bin_cmd!("devclean")
+        .arg("analyze")
+        .args(["--format", "json"])
+        .arg(temporary.path())
+        .env("DEVCLEAN_HISTORY_DB", &database)
+        .assert()
+        .success();
+    fs::write(&payload, vec![0_u8; 1024 * 1024])?;
+
+    cargo_bin_cmd!("devclean")
+        .arg("analyze")
+        .args(["--format", "json"])
+        .arg(temporary.path())
+        .env("DEVCLEAN_HISTORY_DB", &database)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""kind": "repeated-growth""#))
+        .stdout(predicate::str::contains(r#""occurrences": 1"#));
+
+    assert!(modules.is_dir());
+    Ok(())
+}
+
+#[test]
 fn watch_once_should_scan_without_cleaning() -> Result<()> {
     let temporary = tempdir()?;
     let modules = temporary.path().join("node_modules");

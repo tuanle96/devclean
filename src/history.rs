@@ -26,6 +26,8 @@ pub struct HistorySummary {
     pub quarantined_bytes: u64,
     pub failures: u64,
     pub category_change_bytes: BTreeMap<Category, i64>,
+    /// Number of consecutive scan snapshots in which each category grew.
+    pub category_growth_events: BTreeMap<Category, u64>,
 }
 
 /// Returns the platform-local history database path.
@@ -97,8 +99,8 @@ pub fn summarize(days: u64, path: Option<&Path>) -> Result<HistorySummary> {
         [to_i64(since)],
         |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
     )?;
-    let first = scan_snapshot(&connection, since, "ASC")?;
-    let latest = scan_snapshot(&connection, since, "DESC")?;
+    let first = scan_snapshot(&connection, since, SortOrder::Ascending)?;
+    let latest = scan_snapshot(&connection, since, SortOrder::Descending)?;
     let latest_bytes = latest.as_ref().map_or(0, |snapshot| snapshot.0);
     let first_bytes = first.as_ref().map_or(latest_bytes, |snapshot| snapshot.0);
     let category_change_bytes = category_delta(
@@ -116,6 +118,7 @@ pub fn summarize(days: u64, path: Option<&Path>) -> Result<HistorySummary> {
         quarantined_bytes: from_i64(cleanup_totals.1),
         failures: from_i64(cleanup_totals.2),
         category_change_bytes,
+        category_growth_events: category_growth_events(&connection, since)?,
     })
 }
 
@@ -164,8 +167,9 @@ fn schema_version(connection: &Connection) -> Result<u32> {
 fn scan_snapshot(
     connection: &Connection,
     since: u64,
-    order: &str,
+    order: SortOrder,
 ) -> Result<Option<(u64, BTreeMap<Category, u64>)>> {
+    let order = order.sql();
     let sql = format!(
         "SELECT total_bytes,categories_json FROM scan_events WHERE at_unix >= ?1 ORDER BY at_unix {order},id {order} LIMIT 1"
     );
@@ -181,6 +185,45 @@ fn scan_snapshot(
         ))
     })
     .transpose()
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+impl SortOrder {
+    const fn sql(self) -> &'static str {
+        match self {
+            Self::Ascending => "ASC",
+            Self::Descending => "DESC",
+        }
+    }
+}
+
+fn category_growth_events(connection: &Connection, since: u64) -> Result<BTreeMap<Category, u64>> {
+    let mut statement = connection.prepare(
+        "SELECT categories_json FROM scan_events WHERE at_unix >= ?1 ORDER BY at_unix ASC,id ASC",
+    )?;
+    let snapshots = statement.query_map([to_i64(since)], |row| row.get::<_, String>(0))?;
+    let mut previous: Option<BTreeMap<Category, u64>> = None;
+    let mut growth = BTreeMap::<Category, u64>::new();
+    for snapshot in snapshots {
+        let current = serde_json::from_str::<BTreeMap<Category, u64>>(&snapshot?)?;
+        if let Some(previous) = &previous {
+            for category in Category::all() {
+                let old = previous.get(&category).copied().unwrap_or(0);
+                let new = current.get(&category).copied().unwrap_or(0);
+                if new > old {
+                    let count = growth.entry(category).or_default();
+                    *count = count.saturating_add(1);
+                }
+            }
+        }
+        previous = Some(current);
+    }
+    Ok(growth)
 }
 
 fn category_delta(
@@ -260,6 +303,7 @@ mod tests {
             }],
             review_candidates: Vec::new(),
             learning_observations: Vec::new(),
+            workspaces: Vec::new(),
             warnings: Vec::new(),
             total_bytes: 2048,
             review_total_bytes: 0,
@@ -312,6 +356,29 @@ mod tests {
         let error = summarize(30, Some(&database)).expect_err("newer schema must be rejected");
 
         assert!(error.to_string().contains("newer than supported"));
+        Ok(())
+    }
+
+    #[test]
+    fn history_should_count_privacy_safe_category_growth_events() -> Result<()> {
+        let temporary = tempdir()?;
+        let database = temporary.path().join("history.sqlite3");
+        let connection = open(Some(&database))?;
+        let first = serde_json::to_string(&BTreeMap::from([(Category::NodeModules, 1024)]))?;
+        let second = serde_json::to_string(&BTreeMap::from([(Category::NodeModules, 2048)]))?;
+        connection.execute(
+            "INSERT INTO scan_events(at_unix,total_bytes,candidate_count,categories_json) VALUES (?1,1024,1,?2)",
+            params![to_i64(now_unix()), first],
+        )?;
+        connection.execute(
+            "INSERT INTO scan_events(at_unix,total_bytes,candidate_count,categories_json) VALUES (?1,2048,1,?2)",
+            params![to_i64(now_unix()), second],
+        )?;
+        drop(connection);
+
+        let summary = summarize(30, Some(&database))?;
+
+        assert_eq!(summary.category_growth_events[&Category::NodeModules], 1);
         Ok(())
     }
 }
