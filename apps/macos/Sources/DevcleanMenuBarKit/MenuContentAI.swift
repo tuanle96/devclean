@@ -19,15 +19,27 @@ extension MenuContentView {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-                Button(role: .cancel) {
-                    showingAIInsight = false
-                } label: {
-                    Text("Close")
-                        .frame(maxWidth: .infinity)
+                HStack(spacing: 8) {
+                    Spacer()
+
+                    Button("Close", role: .cancel) {
+                        showingAIInsight = false
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("ai-insight-close")
+
+                    if let title = aiPrimaryActionTitle {
+                        Button(title) {
+                            model.generateAIRecommendations()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(
+                            (model.report?.candidates.isEmpty ?? true)
+                                && model.visibleReviewCandidates.isEmpty
+                        )
+                        .accessibilityIdentifier("ai-recommend-generate")
+                    }
                 }
-                .buttonStyle(.bordered)
-                .keyboardShortcut(.cancelAction)
-                .accessibilityIdentifier("ai-insight-close")
             }
             .padding(20)
             .frame(width: 390)
@@ -39,6 +51,8 @@ extension MenuContentView {
             .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
             .padding(20)
             .accessibilityAddTraits(.isModal)
+            .accessibilityFocused($overlayFocus, equals: .aiInsight)
+            .onAppear { overlayFocus = .aiInsight }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .zIndex(1)
@@ -55,7 +69,6 @@ extension MenuContentView {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            aiInsightGenerateButton(title: "Generate Recommendations")
         case .generating:
             HStack(spacing: 10) {
                 ProgressView()
@@ -89,7 +102,6 @@ extension MenuContentView {
                 }
             }
             .frame(maxHeight: 330)
-            aiInsightGenerateButton(title: "Refresh Recommendations")
         case .unavailable(let availability):
             Label(availability.title, systemImage: "apple.intelligence")
                 .font(.headline)
@@ -97,7 +109,6 @@ extension MenuContentView {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            aiInsightGenerateButton(title: "Check Again")
         case .failed(let message):
             Label("AI recommendations could not be generated", systemImage: "exclamationmark.triangle")
                 .font(.headline)
@@ -106,7 +117,18 @@ extension MenuContentView {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            aiInsightGenerateButton(title: "Try Again")
+        }
+    }
+
+    /// Title for the dialog's primary action, which varies with the AI state.
+    /// Nil while generating — there is nothing to trigger mid-flight.
+    var aiPrimaryActionTitle: String? {
+        switch aiInsights.state {
+        case .idle: "Generate Recommendations"
+        case .generating: nil
+        case .result: "Refresh Recommendations"
+        case .unavailable: "Check Again"
+        case .failed: "Try Again"
         }
     }
 
@@ -209,21 +231,6 @@ extension MenuContentView {
         default:
             aiInsights.reset()
         }
-    }
-
-    func aiInsightGenerateButton(title: String) -> some View {
-        Button {
-            model.generateAIRecommendations()
-        } label: {
-            Text(title)
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(
-            (model.report?.candidates.isEmpty ?? true)
-                && model.visibleReviewCandidates.isEmpty
-        )
-        .accessibilityIdentifier("ai-recommend-generate")
     }
 
     func presentAIInsight() {

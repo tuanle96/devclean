@@ -12,6 +12,12 @@ All notable changes to this project are documented here following [Keep a Change
 
 ### Changed
 
+- The macOS candidate lists are native Lists with keyboard row navigation, project names in row titles ("Rust target · VibeTG"), and content-sized viewports.
+- macOS cleanup and safety-hold confirmations use horizontal Mac alert button rows with Cancel beside the primary action, drop the extra "Back" step, and move VoiceOver focus into the dialog when it opens.
+- The macOS Clean button states the selected size ("Clean 38.77 GB…"), "Delete All" moves into the Holds summary menu away from the window edge, and the Holds summary shows when the oldest hold expires.
+- macOS AI recommendations keep a single manual entry point beside Scan, the monitoring banner sits on a neutral material background, and the AI dialog uses a standard trailing button row.
+- The macOS menu bar icon keeps one externaldrive silhouette across every state and pulses while busy on macOS 14+; tapping a background-scan notification activates DevCleaner.
+- macOS scan-status copy drops scanner jargon, the disk capacity bar explains its remaining "other used" slice and reads as one VoiceOver element, and Settings labels use consistent capitalization with `SettingsLink` on macOS 14+.
 - Split scanner classification, core CLI subcommands, and the macOS menu content into focused modules without changing cleanup authority or public commands.
 - Version the local SQLite history schema with transactional `PRAGMA user_version` migrations; legacy unversioned databases upgrade in place and newer unsupported schemas are rejected.
 - Replace the internal free-form SQL sort direction with a closed enum and derive repeated category-growth counts from path-free history snapshots.

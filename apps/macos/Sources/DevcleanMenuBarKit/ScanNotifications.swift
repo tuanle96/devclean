@@ -1,5 +1,30 @@
+import AppKit
 import Foundation
 @preconcurrency import UserNotifications
+
+/// Brings the app forward when a scan notification is tapped. MenuBarExtra has no
+/// public API to open its own popover, so activation plus the state-badged menu
+/// bar icon is the closest supported hand-off.
+private final class ScanNotificationTapHandler: NSObject, UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        completionHandler()
+    }
+}
 
 /// Opt-in local notifications for background scans. The 6-hour background scan is
 /// otherwise invisible; when the user enables notifications DevCleaner tells them
@@ -7,6 +32,7 @@ import Foundation
 @MainActor
 public final class ScanNotifier {
     private let center: UNUserNotificationCenter?
+    private let tapHandler = ScanNotificationTapHandler()
     private var lastNotifiedBytes: UInt64 = 0
 
     /// ~5 GB — below this a notification is more nagging than useful.
@@ -16,6 +42,7 @@ public final class ScanNotifier {
         // UNUserNotificationCenter.current() traps when there is no application
         // bundle (e.g. unit tests / SwiftPM run). Guard on a bundle identifier.
         center = Bundle.main.bundleIdentifier == nil ? nil : .current()
+        center?.delegate = tapHandler
     }
 
     /// Requests authorization the first time the user turns notifications on.

@@ -9,8 +9,10 @@ extension MenuContentView {
         case .hidden:
             EmptyView()
         case .chooseMethod:
-            Text("Clean selected artifacts?")
+            Text(cleanupTitle)
                 .font(.headline)
+                .accessibilityFocused($overlayFocus, equals: .cleanupChoose)
+                .onAppear { overlayFocus = .cleanupChoose }
 
             Text(
                 model.usesSafetyHold
@@ -21,38 +23,39 @@ extension MenuContentView {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
-            if model.usesSafetyHold {
-                Button {
-                    savedSelection = nil
-                    cleanupConfirmation.confirm {
-                        model.cleanSelected(disposition: .configuredSafetyHold)
-                    }
-                } label: {
-                    Text(
-                        "Hold \(ByteFormatting.string(model.selectedBytes)) for \(model.safetyHoldDays) \(model.safetyHoldDays == 1 ? "Day" : "Days")"
-                    )
-                    .frame(maxWidth: .infinity)
+            // Mac alert anatomy: destructive alternative leading, Cancel beside the
+            // safe default action trailing; Return holds, Esc cancels.
+            HStack(spacing: 8) {
+                Button("Delete Now…", role: .destructive) {
+                    cleanupConfirmation.requestImmediateDeletion()
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
                 .disabled(model.isBusy || model.selectedPaths.isEmpty)
-                .accessibilityIdentifier("cleanup-hold")
-            }
+                .accessibilityIdentifier("cleanup-delete-now")
 
-            Button(role: .destructive) {
-                cleanupConfirmation.requestImmediateDeletion()
-            } label: {
-                Text("Delete \(ByteFormatting.string(model.selectedBytes)) Now…")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.isBusy || model.selectedPaths.isEmpty)
-            .accessibilityIdentifier("cleanup-delete-now")
+                Spacer()
 
-            cleanupCancelButton
+                cleanupCancelButton
+
+                if model.usesSafetyHold {
+                    Button(
+                        "Hold for \(model.safetyHoldDays) \(model.safetyHoldDays == 1 ? "Day" : "Days")"
+                    ) {
+                        savedSelection = nil
+                        cleanupConfirmation.confirm {
+                            model.cleanSelected(disposition: .configuredSafetyHold)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(model.isBusy || model.selectedPaths.isEmpty)
+                    .accessibilityIdentifier("cleanup-hold")
+                }
+            }
         case .confirmImmediateDeletion:
-            Text("Permanently delete selected artifacts?")
+            Text("Permanently delete \(ByteFormatting.string(model.selectedBytes))?")
                 .font(.headline)
+                .accessibilityFocused($overlayFocus, equals: .cleanupConfirm)
+                .onAppear { overlayFocus = .cleanupConfirm }
 
             Text(
                 "This reclaims the space immediately and cannot be undone or restored. DevCleaner re-verifies every selected path right before deletion."
@@ -61,41 +64,39 @@ extension MenuContentView {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
-            Button(role: .destructive) {
-                savedSelection = nil
-                cleanupConfirmation.confirm {
-                    model.cleanSelected(disposition: .deleteImmediately)
+            HStack(spacing: 8) {
+                Spacer()
+
+                cleanupCancelButton
+
+                // Visually primary because deletion is this step's only purpose;
+                // Return deliberately stays unbound for a destructive action.
+                Button(role: .destructive) {
+                    savedSelection = nil
+                    cleanupConfirmation.confirm {
+                        model.cleanSelected(disposition: .deleteImmediately)
+                    }
+                } label: {
+                    Text("Permanently Delete \(ByteFormatting.string(model.selectedBytes))")
                 }
-            } label: {
-                Text("Permanently Delete \(ByteFormatting.string(model.selectedBytes))")
-                    .frame(maxWidth: .infinity)
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(model.isBusy || model.selectedPaths.isEmpty)
+                .accessibilityIdentifier("cleanup-delete-confirm")
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .disabled(model.isBusy || model.selectedPaths.isEmpty)
-            .accessibilityIdentifier("cleanup-delete-confirm")
-
-            Button {
-                cleanupConfirmation.returnToMethods()
-            } label: {
-                Text("Back")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .accessibilityIdentifier("cleanup-delete-back")
-
-            cleanupCancelButton
         }
     }
 
+    var cleanupTitle: String {
+        let count = model.selectedPaths.count
+        return
+            "Clean \(count) \(count == 1 ? "item" : "items") (\(ByteFormatting.string(model.selectedBytes)))?"
+    }
+
     var cleanupCancelButton: some View {
-        Button(role: .cancel) {
+        Button("Cancel", role: .cancel) {
             cancelCleanup()
-        } label: {
-            Text("Cancel")
-                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
         .keyboardShortcut(.cancelAction)
         .accessibilityIdentifier("cleanup-cancel")
     }

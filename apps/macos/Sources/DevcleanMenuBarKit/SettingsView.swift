@@ -95,7 +95,7 @@ public struct SettingsView: View {
         Form {
             Section("App") {
                 Toggle(
-                    "Launch DevCleaner at Login",
+                    "Launch DevCleaner at login",
                     isOn: Binding(
                         get: { launchAtLogin.isEnabledOrPendingApproval },
                         set: { launchAtLogin.setEnabled($0) }
@@ -110,7 +110,7 @@ public struct SettingsView: View {
             }
 
             Section("Notifications") {
-                Toggle("Notify Me After Background Scans", isOn: $scanNotifications)
+                Toggle("Notify me after background scans", isOn: $scanNotifications)
                     .onChange(of: scanNotifications) { enabled in
                         if enabled { model.requestScanNotificationsAuthorization() }
                     }
@@ -135,7 +135,7 @@ public struct SettingsView: View {
 
     private var scanSettings: some View {
         Form {
-            Section("Scan locations") {
+            Section("Scan Locations") {
                 if scanLocations.isEmpty {
                     Label("Default: ~/Dev and ~/Projects", systemImage: "folder")
                         .foregroundStyle(.secondary)
@@ -183,7 +183,7 @@ public struct SettingsView: View {
                 }
             }
 
-            Section("Always scanned") {
+            Section("Always Scanned") {
                 ForEach(Self.coreCategories) { category in
                     HStack {
                         Label(category.title, systemImage: category.systemImage)
@@ -198,7 +198,7 @@ public struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Also scan") {
+            Section("Also Scan") {
                 Toggle("Build outputs", isOn: $buildOutputs)
                 Toggle("Test caches", isOn: $testCaches)
                 Toggle("Package and tool caches", isOn: $globalCaches)
@@ -351,7 +351,7 @@ public struct SettingsView: View {
                 .foregroundStyle(.secondary)
             }
 
-            Section("Safety holds") {
+            Section("Safety Holds") {
                 if model.quarantineEntries.isEmpty {
                     Text("No restorable holds.")
                         .foregroundStyle(.secondary)

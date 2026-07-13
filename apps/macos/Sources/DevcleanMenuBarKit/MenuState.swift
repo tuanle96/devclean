@@ -16,7 +16,6 @@ final class CleanupConfirmationCoordinator: ObservableObject {
     func present() { stage = .chooseMethod }
     func cancel() { stage = .hidden }
     func requestImmediateDeletion() { stage = .confirmImmediateDeletion }
-    func returnToMethods() { stage = .chooseMethod }
 
     func confirm(perform action: () -> Void) {
         stage = .hidden
@@ -42,4 +41,14 @@ enum MenuSection: String, CaseIterable, Identifiable {
 enum HoldPurgeRequest: Equatable {
     case one(QuarantineEntry)
     case all
+}
+
+/// Distinct VoiceOver focus targets for the modal cards. Consecutive dialogs
+/// (choose method → confirm deletion) need different values so the second card
+/// re-triggers focus; a shared Bool would already be `true` on the transition.
+enum OverlayFocusTarget: Hashable {
+    case cleanupChoose
+    case cleanupConfirm
+    case holdPurge
+    case aiInsight
 }

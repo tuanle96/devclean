@@ -19,7 +19,9 @@ struct CandidateRow: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(candidate.category.title).font(.subheadline)
+                        Text(titleText)
+                            .font(.subheadline)
+                            .lineLimit(1)
                         Spacer()
                         if let age = UIFormatting.ageText(candidate.modifiedAtUnix) {
                             Text(age).font(.caption2).foregroundStyle(.tertiary)
@@ -57,9 +59,26 @@ struct CandidateRow: View {
             }
         }
         .accessibilityLabel(
-            "\(candidate.category.title), \(ByteFormatting.string(candidate.bytes)), rebuildable"
+            ([candidate.category.title, projectName, ByteFormatting.string(candidate.bytes), "rebuildable"]
+                .compactMap { $0 })
+                .joined(separator: ", ")
         )
         .accessibilityHint(candidate.path)
+    }
+
+    private var titleText: String {
+        projectName.map { "\(candidate.category.title) · \($0)" } ?? candidate.category.title
+    }
+
+    /// Global caches live under ~/Library or dot-folders, where the parent
+    /// directory name ("Caches", ".cache") is noise rather than a project.
+    private var projectName: String? {
+        switch candidate.category {
+        case .globalCache, .expensiveGlobalCache:
+            nil
+        default:
+            UIFormatting.projectName(forPath: candidate.path)
+        }
     }
 }
 
@@ -75,7 +94,7 @@ struct ReviewCandidateRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(title).font(.subheadline)
+                    Text(title).font(.subheadline).lineLimit(1)
                     Spacer()
                     if let age = UIFormatting.ageText(candidate.modifiedAtUnix) {
                         Text(age).font(.caption2).foregroundStyle(.tertiary)
@@ -127,13 +146,17 @@ struct ReviewCandidateRow: View {
     private var title: String {
         candidate.approved
             ? "Approved · will appear in Clean when eligible"
-            : candidate.suggestedRule?.title ?? "Needs review"
+            : "\(candidate.suggestedRule?.title ?? "Needs review") · \(projectName)"
+    }
+
+    private var projectName: String {
+        UIFormatting.projectName(forPath: candidate.path, projectRoot: candidate.projectRoot)
     }
 
     private var accessibilityLabel: String {
         let type = candidate.suggestedRule?.title ?? "Review artifact"
         let state = candidate.approved ? "approved" : "needs review"
-        return "\(type), \(ByteFormatting.string(candidate.bytes)), \(state)"
+        return "\(type), \(projectName), \(ByteFormatting.string(candidate.bytes)), \(state)"
     }
 
     private func toggleApproval() {

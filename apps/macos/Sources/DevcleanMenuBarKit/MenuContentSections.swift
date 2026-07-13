@@ -50,7 +50,9 @@ extension MenuContentView {
                             .foregroundStyle(.secondary)
                     }
                     .padding(9)
-                    .background(.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+                    // AI identity lives in the sparkles glyph; the surface stays a
+                    // neutral material so the banner doesn't fight the accent color.
+                    .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("ai-monitoring-result")
@@ -71,24 +73,16 @@ extension MenuContentView {
                         systemImage: "checkmark.shield"
                     )
                     Spacer()
-                    if aiInsightsEnabled {
-                        Button {
-                            presentAIInsight()
-                        } label: {
-                            Label("Recommend", systemImage: "sparkles")
-                        }
-                        .buttonStyle(.bordered)
+                    Button("All") { model.selectAll() }
+                        .buttonStyle(.borderless)
                         .controlSize(.small)
                         .disabled(model.isBusy)
-                        .accessibilityIdentifier("ai-recommend-open-clean")
-                    }
-                    Button("All") { model.selectAll() }
-                        .buttonStyle(.plain)
-                        .disabled(model.isBusy)
-                    Text("·").foregroundStyle(.tertiary)
+                        .accessibilityLabel("Select all artifacts")
                     Button("None") { model.selectNone() }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
                         .disabled(model.isBusy)
+                        .accessibilityLabel("Deselect all artifacts")
                 }
                 .font(.subheadline)
             }
@@ -103,17 +97,6 @@ extension MenuContentView {
                 Text(observedForText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if aiInsightsEnabled, !model.visibleReviewCandidates.isEmpty {
-                    Button {
-                        presentAIInsight()
-                    } label: {
-                        Label("Recommend", systemImage: "sparkles")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(model.isBusy)
-                    .accessibilityIdentifier("ai-recommend-open-review")
-                }
             }
         case .holds:
             HStack(spacing: 10) {
@@ -124,15 +107,48 @@ extension MenuContentView {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(ByteFormatting.string(model.safetyHoldBytes)) held safely")
                         .font(.subheadline.weight(.semibold))
-                    Text("Restore items, or permanently delete them to reclaim space now.")
+                    Text(holdsSummaryCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                if !model.quarantineEntries.isEmpty {
+                    // Destructive bulk action lives in an overflow menu near the top
+                    // of the window, away from the hasty-click zone at the bottom.
+                    Menu {
+                        Button(role: .destructive) {
+                            holdPurgeRequest = .all
+                        } label: {
+                            Label(
+                                "Delete All · \(ByteFormatting.string(model.safetyHoldBytes))…",
+                                systemImage: "trash"
+                            )
+                        }
+                        .accessibilityIdentifier("hold-delete-all")
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                    .disabled(model.isBusy)
+                    .accessibilityLabel("Safety hold actions")
                 }
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
         }
+    }
+
+    var holdsSummaryCaption: String {
+        // min(expiresAtUnix) is the soonest-expiring hold — the retention fact
+        // that matters — which is not necessarily the oldest one.
+        guard let soonest = model.quarantineEntries.map(\.expiresAtUnix).min() else {
+            return "Restore items, or permanently delete them to reclaim space now."
+        }
+        let phrase = UIFormatting.expiryText(soonest)
+        return "Next hold \(phrase.prefix(1).lowercased() + phrase.dropFirst())."
     }
 
     var observedForText: String {
@@ -193,7 +209,11 @@ extension MenuContentView {
                 }
                 .frame(height: 6)
                 .clipShape(Capsule())
-                .accessibilityHidden(true)
+                // The legend below only names the three actionable slices; the bar
+                // itself explains the remaining gray bulk and reads as one element.
+                .help(capacityBarHelp(segments))
+                .accessibilityElement()
+                .accessibilityLabel(capacityBarSummary(segments))
 
                 HStack(spacing: 12) {
                     ForEach(segments.filter { $0.id != "other" }) { segment in
@@ -207,8 +227,23 @@ extension MenuContentView {
                         }
                     }
                 }
+                .accessibilityHidden(true)
             }
         }
+    }
+
+    func capacityBarHelp(_ segments: [CapacitySegment]) -> String {
+        guard let other = segments.first(where: { $0.id == "other" }) else {
+            return "Disk capacity"
+        }
+        return "The gray area is \(ByteFormatting.string(other.bytes)) used by everything else on this disk."
+    }
+
+    func capacityBarSummary(_ segments: [CapacitySegment]) -> String {
+        "Disk capacity: "
+            + segments
+            .map { "\(ByteFormatting.string($0.bytes)) \($0.label)" }
+            .joined(separator: ", ")
     }
 
     var subtitleText: String {
@@ -272,16 +307,16 @@ extension MenuContentView {
     @ViewBuilder
     var cleanContent: some View {
         if let candidates = model.report?.candidates, !candidates.isEmpty {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(candidates) { candidate in
-                        CandidateRow(candidate: candidate, model: model)
-                        if candidate.id != candidates.last?.id {
-                            Divider().padding(.leading, 30)
-                        }
-                    }
+            // List (not ScrollView) so rows get selection, arrow-key navigation,
+            // and standard separators for free.
+            List(selection: $listFocus) {
+                ForEach(candidates) { candidate in
+                    CandidateRow(candidate: candidate, model: model)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .frame(height: listHeight(for: candidates.count, rowHeight: 48))
         } else {
             VStack(spacing: 9) {
@@ -297,8 +332,10 @@ extension MenuContentView {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 300)
                 HStack(spacing: 8) {
-                    Button("Open Settings…") { openSettingsWindow() }
-                        .buttonStyle(.bordered)
+                    openSettingsButton {
+                        Text("Open Settings…")
+                    }
+                    .buttonStyle(.bordered)
                     if !model.quarantineEntries.isEmpty {
                         Button("View \(ByteFormatting.string(model.safetyHoldBytes)) in Holds") {
                             selectedSection = .holds
@@ -315,16 +352,14 @@ extension MenuContentView {
     @ViewBuilder
     var reviewContent: some View {
         if !model.visibleReviewCandidates.isEmpty {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.visibleReviewCandidates) { candidate in
-                        ReviewCandidateRow(candidate: candidate, model: model)
-                        if candidate.id != model.visibleReviewCandidates.last?.id {
-                            Divider().padding(.leading, 30)
-                        }
-                    }
+            List(selection: $listFocus) {
+                ForEach(model.visibleReviewCandidates) { candidate in
+                    ReviewCandidateRow(candidate: candidate, model: model)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .frame(height: listHeight(for: model.visibleReviewCandidates.count, rowHeight: 52))
         } else {
             VStack(spacing: 9) {
@@ -347,16 +382,14 @@ extension MenuContentView {
     @ViewBuilder
     var holdsContent: some View {
         if !model.quarantineEntries.isEmpty {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.quarantineEntries) { entry in
-                        safetyHoldRow(entry)
-                        if entry.id != model.quarantineEntries.last?.id {
-                            Divider().padding(.leading, 30)
-                        }
-                    }
+            List(selection: $listFocus) {
+                ForEach(model.quarantineEntries) { entry in
+                    safetyHoldRow(entry)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .frame(height: listHeight(for: model.quarantineEntries.count, rowHeight: 58))
         } else {
             VStack(spacing: 9) {

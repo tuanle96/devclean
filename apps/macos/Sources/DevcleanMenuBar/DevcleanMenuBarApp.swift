@@ -19,7 +19,12 @@ struct DevcleanMenuBarApp: App {
         MenuBarExtra {
             MenuContentView(model: model)
         } label: {
-            Label("DevCleaner", systemImage: model.menuBarSymbol)
+            if #available(macOS 14.0, *) {
+                Label("DevCleaner", systemImage: model.menuBarSymbol)
+                    .symbolEffect(.pulse, isActive: model.isBusy)
+            } else {
+                Label("DevCleaner", systemImage: model.menuBarSymbol)
+            }
         }
         .menuBarExtraStyle(.window)
 

@@ -41,9 +41,6 @@ func cleanupConfirmationRunsActionBeforeLeavingPresentedState() {
     confirmation.requestImmediateDeletion()
     #expect(confirmation.stage == .confirmImmediateDeletion)
 
-    confirmation.returnToMethods()
-    #expect(confirmation.stage == .chooseMethod)
-
     confirmation.confirm {
         actionCount += 1
     }
@@ -103,6 +100,42 @@ func capacityBarBuildsHonestDiskSegments() {
     let over = CapacityBar.segments(total: 100, free: 90, held: 30, reclaimable: 20) ?? []
     #expect(over.map(\.bytes).reduce(0, +) == 100)
     #expect(over.allSatisfy { $0.bytes <= 100 })
+}
+
+@Test
+func projectNamePrefersScannerRootOverParentDirectory() {
+    #expect(
+        UIFormatting.projectName(forPath: "/Users/me/Dev/VibeTG/target") == "VibeTG"
+    )
+    #expect(
+        UIFormatting.projectName(
+            forPath: "/Users/me/Dev/mono/apps/web/.build",
+            projectRoot: "/Users/me/Dev/mono"
+        ) == "mono"
+    )
+    #expect(
+        UIFormatting.projectName(forPath: "/Users/me/Dev/mono/apps/web/.build", projectRoot: "")
+            == "web"
+    )
+}
+
+@Test
+func menuBarStateSymbolsAllExistInSFSymbols() {
+    // The badge family keeps one silhouette across states; a typo here would
+    // silently render an empty menu bar icon, so validate against the system.
+    let symbols = [
+        "externaldrive",
+        "externaldrive.badge.checkmark",
+        "externaldrive.badge.minus",
+        "externaldrive.badge.questionmark",
+        "externaldrive.trianglebadge.exclamationmark",
+    ]
+    for name in symbols {
+        #expect(
+            NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil,
+            "missing SF Symbol: \(name)"
+        )
+    }
 }
 
 @Test

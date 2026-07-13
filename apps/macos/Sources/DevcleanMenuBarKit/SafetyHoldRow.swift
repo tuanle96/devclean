@@ -19,7 +19,9 @@ struct SafetyHoldRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(entry.category.title).font(.subheadline)
+                    Text(titleText)
+                        .font(.subheadline)
+                        .lineLimit(1)
                     Spacer()
                     Text(ByteFormatting.string(entry.bytes))
                         .font(.caption.monospacedDigit())
@@ -33,6 +35,7 @@ struct SafetyHoldRow: View {
                         .truncationMode(.middle)
                         .help(entry.originalPath)
                     Text("·").font(.caption2).foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                     Text(UIFormatting.expiryText(entry.expiresAtUnix))
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(UIFormatting.expiryColor(entry.expiresAtUnix))
@@ -68,8 +71,19 @@ struct SafetyHoldRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(entry.category.title), \(ByteFormatting.string(entry.bytes)), safety hold, \(UIFormatting.expiryText(entry.expiresAtUnix))"
+            "\(titleText), \(ByteFormatting.string(entry.bytes)), safety hold, \(UIFormatting.expiryText(entry.expiresAtUnix))"
         )
         .accessibilityHint(entry.originalPath)
+    }
+
+    /// Global caches live under ~/Library or dot-folders, where the parent
+    /// directory name is noise rather than a project.
+    private var titleText: String {
+        switch entry.category {
+        case .globalCache, .expensiveGlobalCache:
+            entry.category.title
+        default:
+            "\(entry.category.title) · \(UIFormatting.projectName(forPath: entry.originalPath))"
+        }
     }
 }
