@@ -4,6 +4,11 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+### Changed
+
+- Split scanner classification, core CLI subcommands, and the macOS menu content into focused modules without changing cleanup authority or public commands.
+- Version the local SQLite history schema with transactional `PRAGMA user_version` migrations; legacy unversioned databases upgrade in place and newer unsupported schemas are rejected.
+
 ## [0.5.0] - 2026-07-13
 
 ### Added
