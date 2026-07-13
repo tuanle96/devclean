@@ -98,10 +98,9 @@ mod tests {
 
     #[test]
     fn go_env_output_should_accept_trimmed_absolute_path() {
-        assert_eq!(
-            parse_go_mod_cache_output(b"/opt/go-mod-cache\n"),
-            Some(PathBuf::from("/opt/go-mod-cache"))
-        );
+        let expected = env::temp_dir().join("go-mod-cache");
+        let output = format!("{}\n", expected.display());
+        assert_eq!(parse_go_mod_cache_output(output.as_bytes()), Some(expected));
     }
 
     #[test]
