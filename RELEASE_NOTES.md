@@ -1,30 +1,29 @@
-# devclean v0.4.1
+# devclean v0.5.0
 
-This patch completes the first review-to-safe Learning Mode loop while preserving Rust as the only cleanup authority.
+This release expands DevCleaner from a safe cleanup CLI into a local developer-disk toolkit while keeping deletion authority narrow and explicit.
 
-## Learning Mode
+## New workflows
 
-- Scans at launch and every six hours.
-- Measures active known artifacts independently of cleanup age/category filters.
-- Suggests a scanner-owned rule for `.build` directories directly beside `Package.swift`.
-- Lets the user approve or revoke that exact SwiftPM build path from the menu bar.
-- Keeps approved paths visible while they wait for the configured cleanup age and size thresholds.
-- Promotes an eligible approved path to `build-output` only after Rust revalidates the rule and Git guard.
-- Keeps up to 30 days and 256 local snapshots, detects recreation after cleanup, and learns `Always select` / `Never clean` feedback.
+- Browse candidates in a read-only `devclean tui`; it prints an exact cleanup command but never deletes.
+- Install, inspect, or remove a platform-native cleanup timer with `devclean schedule`; installation requires explicit `--yes` authority and supports a complete dry run.
+- Track aggregate scan and cleanup trends in a local SQLite database and render them with `devclean stats`; candidate paths are never persisted.
+- Share repository policy through `.devclean.toml`, `devclean init`, validated Git-backed config fetch, and marker-backed custom rules.
+- Use the VS Code status-bar companion for workspace scans, HTML reports, dry-run previews, and separately confirmed cleanup.
 
-## Restorable safety holds
+## Ecosystem and automation
 
-- `clean --quarantine-for 7d` moves validated artifacts into hidden adjacent holds.
-- `quarantine list`, `restore`, and `purge` manage the private registry.
-- The UI states explicitly that holds retain disk usage until purge and refuses to overwrite a recreated original path.
+- Safe Python bytecode, test-environment, and project-local virtual-environment detection.
+- Gradle/Kotlin, CMake, Zig, and custom Go module-cache support.
+- Native filesystem watch mode with thresholds, scan intervals, and best-effort notifications.
+- JSONL automation output for cleanup jobs.
 
-## Diagnostics and privacy
+## Safety and architecture
 
-- Rotating structured local JSONL logs are always available from Settings.
-- The protocol-based monitoring layer ships with NoOp/local/Sentry providers.
-- Sentry is disabled without a configured DSN and explicit user consent.
-- Remote product events contain aggregate buckets and error fingerprints only; paths, usernames, project names, file contents, screenshots, and view hierarchy are excluded.
+- `clean --dry-run` and `clean --undo` make preview and recovery first-class.
+- Custom rules require exact directory names and direct project markers, are rejected on unsafe path components, and are revalidated immediately before deletion.
+- HTML is rendered through autoescaped templates.
+- Rust CLI/measurement commands and Swift candidate, review, hold, settings, and menu-state components are split into focused modules.
 
 ## Verification
 
-Release gates cover Rust unit/integration/doc tests, Swift contract/learning/log tests, Clippy, MSRV, package verification, universal app build, Developer ID signing, Apple notarization, stapling, Gatekeeper acceptance, checksums, SBOM, and provenance attestations.
+Release gates cover Rust unit, integration, documentation, Clippy, MSRV, package, and live watch checks; Swift formatting, contract tests, app build, and codesign; and TypeScript build, tests, and type checking for the VS Code extension. Published macOS archives additionally require Developer ID signing, notarization, stapling, Gatekeeper acceptance, checksums, SBOM, and provenance attestations.

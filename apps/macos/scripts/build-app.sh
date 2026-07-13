@@ -6,7 +6,8 @@ app_dir="$(cd "$script_dir/.." && pwd)"
 repo_dir="$(cd "$app_dir/../.." && pwd)"
 configuration="${CONFIGURATION:-release}"
 output_dir="${OUTPUT_DIR:-$repo_dir/dist}"
-app_bundle="$output_dir/Devclean.app"
+app_bundle="$output_dir/DevCleaner.app"
+legacy_app_bundle="$output_dir/Devclean.app"
 swift_build_args=(--package-path "$app_dir" -c "$configuration")
 
 if [[ -n "${HELPER_EXECUTABLE:-}" ]]; then
@@ -37,11 +38,12 @@ fi
 swift build "${swift_build_args[@]}"
 swift_bin_dir="$(swift build "${swift_build_args[@]}" --show-bin-path)"
 
-rm -rf "$app_bundle"
-mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Helpers"
+rm -rf "$app_bundle" "$legacy_app_bundle"
+mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Helpers" "$app_bundle/Contents/Resources"
 cp "$swift_bin_dir/DevcleanMenuBar" "$app_bundle/Contents/MacOS/DevcleanMenuBar"
 cp "$helper" "$app_bundle/Contents/Helpers/devclean"
 cp "$app_dir/Resources/Info.plist" "$app_bundle/Contents/Info.plist"
+cp "$app_dir/Resources/AppIcon.icns" "$app_bundle/Contents/Resources/AppIcon.icns"
 if [[ -n "${SENTRY_DSN:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :DevcleanSentryDSN $SENTRY_DSN" "$app_bundle/Contents/Info.plist"
 fi

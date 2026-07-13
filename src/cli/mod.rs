@@ -1,0 +1,987 @@
+use std::collections::HashSet;
+use std::env;
+use std::fs;
+use std::io::{self, IsTerminal, Write as _};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result, bail};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
+use devclean::docker;
+use devclean::{
+    Category, CleanOptions, Config, LearningMode, OutputFormat, RenderOptions, ScanOptions,
+    ScanReport, clean_with_options, config_candidates, default_roots, human_bytes, list_quarantine,
+    load_config, parse_age, parse_bytes, purge_expired, purge_selected, render_with_options,
+    restore_quarantine, scan,
+};
+
+mod config_command;
+mod init;
+mod schedule;
+mod stats;
+mod tui;
+mod watch;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "devclean",
+    version,
+    about = "Audit and safely remove rebuildable development artifacts",
+    arg_required_else_help = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Generate a documented project configuration template.
+    Init(init::Args),
+    /// Fetch and validate a shared configuration from a Git repository.
+    Config(config_command::Args),
+    /// Show local scan growth and cleanup history.
+    Stats(stats::Args),
+    /// Install, inspect, or remove recurring cleanup jobs.
+    Schedule(schedule::Args),
+    /// Select cleanup candidates in a read-only terminal UI.
+    Tui(tui::Args),
+    /// Inventory rebuildable artifacts without deleting anything.
+    Scan(ScanArgs),
+    /// Watch scan roots and report when reclaimable artifacts cross a threshold.
+    Watch(WatchArgs),
+    /// Delete a freshly scanned, safety-validated cleanup plan.
+    Clean(CleanArgs),
+    /// Show defaults, safety guarantees, configuration, and tool availability.
+    Doctor,
+    /// List, restore, or purge persistent cleanup safety holds.
+    Quarantine(QuarantineArgs),
+    /// Generate shell completion scripts.
+    Completions(CompletionsArgs),
+    /// Generate a roff manual page.
+    Manpage(ManpageArgs),
+}
+
+#[derive(Debug, Args)]
+struct WatchArgs {
+    #[command(flatten)]
+    shared: SharedScanArgs,
+
+    /// Notify when reclaimable artifacts reach this size, for example 5GiB.
+    #[arg(long, value_name = "SIZE")]
+    threshold: Option<String>,
+
+    /// Minimum duration between event-triggered scans, for example 1h.
+    #[arg(long, value_name = "DURATION")]
+    interval: Option<String>,
+
+    /// Scan once and exit; useful for launch agents and verification.
+    #[arg(long)]
+    once: bool,
+
+    /// Print threshold crossings without sending a desktop notification.
+    #[arg(long)]
+    no_notify: bool,
+}
+
+#[derive(Debug, Args)]
+struct SharedScanArgs {
+    /// Roots to scan. Defaults to config, then common development directories.
+    #[arg(value_name = "ROOT")]
+    roots: Vec<PathBuf>,
+
+    /// Configuration file. Defaults to ./.devclean.toml, ./devclean.toml, or platform config.
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Categories to include. May be repeated or comma-separated.
+    #[arg(long, value_enum, value_delimiter = ',')]
+    category: Vec<Category>,
+
+    /// Exclude a path glob. May be repeated.
+    #[arg(long, value_name = "GLOB")]
+    exclude: Vec<String>,
+
+    /// Include package-manager and development-tool caches that are cheap to restore.
+    #[arg(long)]
+    global_caches: bool,
+
+    /// Include large runtime and model caches that can be expensive to restore.
+    #[arg(long)]
+    expensive_caches: bool,
+
+    /// Only include artifacts older than this duration, for example 30d or 12h.
+    #[arg(long)]
+    older_than: Option<String>,
+
+    /// Only include artifacts at least this large, for example 500MiB.
+    #[arg(long)]
+    min_size: Option<String>,
+
+    /// Maximum directory depth below each root.
+    #[arg(long)]
+    max_depth: Option<usize>,
+
+    /// Permit cleanup of candidates containing Git-tracked files.
+    #[arg(long)]
+    allow_tracked: bool,
+
+    /// Approve an exact review path only when it still matches a scanner-owned safe rule.
+    #[arg(long = "approve-review-path", value_name = "PATH")]
+    approved_review_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct ScanArgs {
+    #[command(flatten)]
+    shared: SharedScanArgs,
+
+    /// Accepted for symmetry with clean; scan already includes every rebuildable category.
+    #[arg(long)]
+    all: bool,
+
+    /// Include Docker's detailed, read-only disk usage summary.
+    #[arg(long)]
+    docker: bool,
+
+    /// Report format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    format: OutputFormat,
+
+    /// Write the report to a file instead of stdout.
+    #[arg(long)]
+    output: Option<PathBuf>,
+
+    /// Replace absolute paths in reports with root-relative placeholders.
+    #[arg(long)]
+    redact_paths: bool,
+
+    #[command(flatten)]
+    learning: LearningArgs,
+}
+
+#[derive(Debug, Args)]
+struct LearningArgs {
+    /// Observe large cache-like directories as review-only Learning Mode candidates.
+    #[arg(long)]
+    learning: bool,
+}
+
+#[derive(Debug, Args)]
+struct CleanArgs {
+    #[command(flatten)]
+    shared: SharedScanArgs,
+
+    /// Include build and test output categories in addition to safe defaults.
+    #[arg(long)]
+    all: bool,
+
+    #[command(flatten)]
+    docker: DockerArgs,
+
+    #[command(flatten)]
+    selection: SelectionArgs,
+
+    /// Skip the final DELETE confirmation.
+    #[arg(long)]
+    yes: bool,
+
+    /// Print the fully filtered cleanup plan without deleting or quarantining anything.
+    #[arg(long, conflicts_with = "undo")]
+    dry_run: bool,
+
+    /// Restore one safety hold by ID; shorthand for `quarantine restore <ID>`.
+    #[arg(long, value_name = "ID", conflicts_with_all = ["dry_run", "select", "target_free", "docker", "docker_system"])]
+    undo: Option<String>,
+
+    /// Keep selected artifacts restorable for this duration, for example 7d.
+    #[arg(long, value_name = "DURATION")]
+    quarantine_for: Option<String>,
+
+    /// Override the quarantine registry path.
+    #[arg(long, hide = true)]
+    quarantine_registry: Option<PathBuf>,
+
+    #[command(flatten)]
+    report: CleanReportArgs,
+}
+
+#[derive(Debug, Args)]
+struct DockerArgs {
+    /// Prune only unused Docker build cache.
+    #[arg(long, conflicts_with = "docker_system")]
+    docker: bool,
+
+    /// Prune stopped containers, unused images/networks, and build cache. Never volumes.
+    #[arg(long, conflicts_with = "docker")]
+    docker_system: bool,
+
+    /// Pass an `until` filter to Docker prune, for example 168h.
+    #[arg(long)]
+    docker_older_than: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct SelectionArgs {
+    /// Interactively select candidates by number or range.
+    #[arg(long)]
+    select: bool,
+
+    /// Clean only exact candidate paths from a previous JSON scan. May be repeated.
+    #[arg(
+        long = "only-path",
+        value_name = "PATH",
+        conflicts_with_all = ["select", "target_free"]
+    )]
+    only_paths: Vec<PathBuf>,
+
+    /// Remove only enough candidates to reach this amount of free space.
+    #[arg(long, value_name = "SIZE")]
+    target_free: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct CleanReportArgs {
+    /// Save the exact pre-clean plan as a standalone HTML report.
+    #[arg(long)]
+    report: Option<PathBuf>,
+
+    /// Replace absolute paths in the saved report with root-relative placeholders.
+    #[arg(long)]
+    redact_paths: bool,
+    /// Emit one machine-readable cleanup outcome line for schedulers.
+    #[arg(long)]
+    result_jsonl: bool,
+}
+
+#[derive(Debug, Args)]
+struct CompletionsArgs {
+    /// Shell syntax to generate.
+    #[arg(value_enum)]
+    shell: Shell,
+}
+
+#[derive(Debug, Args)]
+struct ManpageArgs {
+    /// Output path. Defaults to stdout.
+    #[arg(long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct QuarantineArgs {
+    #[command(subcommand)]
+    command: QuarantineCommands,
+}
+
+#[derive(Debug, Subcommand)]
+enum QuarantineCommands {
+    /// List restorable safety holds.
+    List(QuarantineListArgs),
+    /// Restore one safety hold to its original path.
+    Restore(QuarantineRestoreArgs),
+    /// Permanently delete expired safety holds.
+    Purge(QuarantinePurgeArgs),
+}
+
+#[derive(Debug, Args)]
+struct QuarantineListArgs {
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+    /// Override the quarantine registry path.
+    #[arg(long, hide = true)]
+    registry: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct QuarantineRestoreArgs {
+    /// Quarantine identifier shown by `quarantine list`.
+    id: String,
+    /// Override the quarantine registry path.
+    #[arg(long, hide = true)]
+    registry: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct QuarantinePurgeArgs {
+    /// Purge all holds, including those that have not expired.
+    #[arg(long)]
+    all: bool,
+    /// Permanently delete one exact safety hold before or after expiry.
+    #[arg(long, value_name = "ID", conflicts_with = "all")]
+    id: Option<String>,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+    /// Override the quarantine registry path.
+    #[arg(long, hide = true)]
+    registry: Option<PathBuf>,
+}
+
+pub fn run() -> Result<()> {
+    match Cli::parse().command {
+        Commands::Init(arguments) => init::run(&arguments),
+        Commands::Config(arguments) => config_command::run(&arguments),
+        Commands::Stats(arguments) => stats::run(&arguments),
+        Commands::Schedule(arguments) => schedule::run(&arguments),
+        Commands::Tui(arguments) => tui::run(&arguments),
+        Commands::Scan(arguments) => run_scan(&arguments),
+        Commands::Watch(arguments) => watch::run(&arguments),
+        Commands::Clean(arguments) => run_clean(&arguments),
+        Commands::Doctor => {
+            run_doctor();
+            Ok(())
+        }
+        Commands::Quarantine(arguments) => run_quarantine(&arguments),
+        Commands::Completions(arguments) => {
+            clap_complete::generate(
+                arguments.shell,
+                &mut Cli::command(),
+                "devclean",
+                &mut io::stdout(),
+            );
+            Ok(())
+        }
+        Commands::Manpage(arguments) => run_manpage(arguments.output.as_deref()),
+    }
+}
+
+fn run_scan(arguments: &ScanArgs) -> Result<()> {
+    let config = load_config(arguments.shared.config.as_deref())?;
+    let categories = select_categories(&arguments.shared, arguments.all, false);
+    let report = scan(&scan_options(
+        &arguments.shared,
+        &config,
+        categories,
+        arguments.learning.learning,
+    )?)?;
+    record_scan_history(&report);
+    write_report(
+        &report,
+        arguments.format,
+        arguments.output.as_deref(),
+        arguments.redact_paths,
+    )?;
+    if arguments.docker {
+        println!("\nDocker disk usage:\n{}", docker::system_df()?);
+    }
+    Ok(())
+}
+
+fn run_clean(arguments: &CleanArgs) -> Result<()> {
+    if let Some(id) = &arguments.undo {
+        let entry = restore_quarantine(id, arguments.quarantine_registry.as_deref())?;
+        println!("restored {}", entry.original_path.display());
+        return Ok(());
+    }
+    if arguments.docker.docker_older_than.is_some()
+        && !arguments.docker.docker
+        && !arguments.docker.docker_system
+    {
+        bail!("--docker-older-than requires --docker or --docker-system");
+    }
+    let config = load_config(arguments.shared.config.as_deref())?;
+    let mut categories = select_categories(&arguments.shared, arguments.all, true);
+    if config.clean.expensive_caches {
+        categories.insert(Category::ExpensiveGlobalCache);
+    }
+    let mut report = scan(&scan_options(
+        &arguments.shared,
+        &config,
+        categories,
+        false,
+    )?)?;
+    if let Some(target) = arguments.selection.target_free.as_deref() {
+        report = limit_to_target_free(report, parse_bytes(target)?)?;
+    }
+    if !arguments.selection.only_paths.is_empty() {
+        report = select_exact_candidates(report, &arguments.selection.only_paths)?;
+    }
+    if arguments.selection.select && !report.candidates.is_empty() {
+        report = select_candidates(report)?;
+    }
+
+    if !arguments.report.result_jsonl {
+        render_clean_plan(&report, &arguments.report)?;
+    }
+
+    let docker_requested = arguments.docker.docker || arguments.docker.docker_system;
+    if arguments.dry_run {
+        report_dry_run(&report, &arguments.docker);
+        return Ok(());
+    }
+    if report.candidates.is_empty() && !docker_requested {
+        if arguments.report.result_jsonl {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "type": "cleanup",
+                    "removed": [],
+                    "quarantined": [],
+                    "failures": [],
+                    "removed_bytes": 0,
+                    "quarantined_bytes": 0,
+                }))?
+            );
+        } else {
+            println!("nothing to clean");
+        }
+        return Ok(());
+    }
+    confirm(arguments.yes)?;
+
+    let clean_options = CleanOptions {
+        quarantine_for: arguments
+            .quarantine_for
+            .as_deref()
+            .map(parse_age)
+            .transpose()?,
+        quarantine_registry: arguments.quarantine_registry.clone(),
+    };
+    let cleaned = clean_with_options(&report, &clean_options);
+    record_cleanup_history(&cleaned);
+    if arguments.report.result_jsonl {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({"type": "cleanup", "outcome": &cleaned}))?
+        );
+    } else {
+        print_clean_outcome(&cleaned);
+    }
+    if arguments.docker.docker {
+        println!(
+            "{}",
+            docker::prune_build_cache(arguments.docker.docker_older_than.as_deref())?
+        );
+    } else if arguments.docker.docker_system {
+        println!(
+            "{}",
+            docker::prune_system(arguments.docker.docker_older_than.as_deref())?
+        );
+    }
+    if !cleaned.failures.is_empty() {
+        for failure in &cleaned.failures {
+            eprintln!("failed: {failure}");
+        }
+        bail!("{} candidates could not be removed", cleaned.failures.len());
+    }
+    Ok(())
+}
+
+fn print_clean_outcome(cleaned: &devclean::CleanReport) {
+    for candidate in &cleaned.removed {
+        println!(
+            "removed {:>10}  {}",
+            human_bytes(candidate.bytes),
+            candidate.path.display()
+        );
+    }
+    for entry in &cleaned.quarantined {
+        println!(
+            "held    {:>10}  {}  until {}",
+            human_bytes(entry.bytes),
+            entry.original_path.display(),
+            format_expiry(entry.expires_at_unix)
+        );
+    }
+    println!(
+        "removed {} filesystem candidates, {} estimated",
+        cleaned.removed.len(),
+        human_bytes(cleaned.removed_bytes)
+    );
+    if !cleaned.quarantined.is_empty() {
+        println!(
+            "held {} candidates, {} retained on disk until purge",
+            cleaned.quarantined.len(),
+            human_bytes(cleaned.quarantined_bytes)
+        );
+    }
+}
+
+fn render_clean_plan(report: &ScanReport, options: &CleanReportArgs) -> Result<()> {
+    print!(
+        "{}",
+        render_with_options(report, OutputFormat::Table, RenderOptions::default())?
+    );
+    if let Some(path) = &options.report {
+        write_report(report, OutputFormat::Html, Some(path), options.redact_paths)?;
+        println!("pre-clean report: {}", path.display());
+    }
+    Ok(())
+}
+
+fn report_dry_run(report: &ScanReport, docker: &DockerArgs) {
+    println!(
+        "dry run: planned {} filesystem candidates, {}; no changes made",
+        report.candidates.len(),
+        human_bytes(report.total_bytes)
+    );
+    if docker.docker {
+        println!("dry run: Docker build cache prune requested; Docker was not invoked");
+    } else if docker.docker_system {
+        println!("dry run: Docker system prune requested; Docker was not invoked");
+    }
+}
+
+fn run_quarantine(arguments: &QuarantineArgs) -> Result<()> {
+    match &arguments.command {
+        QuarantineCommands::List(arguments) => {
+            let entries = list_quarantine(arguments.registry.as_deref())?;
+            if arguments.json {
+                println!("{}", serde_json::to_string_pretty(&entries)?);
+            } else if entries.is_empty() {
+                println!("no safety holds");
+            } else {
+                println!("ID\tEXPIRES\tSIZE\tORIGINAL PATH");
+                for entry in entries {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        entry.id,
+                        format_expiry(entry.expires_at_unix),
+                        human_bytes(entry.bytes),
+                        entry.original_path.display()
+                    );
+                }
+            }
+            Ok(())
+        }
+        QuarantineCommands::Restore(arguments) => {
+            let entry = restore_quarantine(&arguments.id, arguments.registry.as_deref())?;
+            println!("restored {}", entry.original_path.display());
+            Ok(())
+        }
+        QuarantineCommands::Purge(arguments) => {
+            let report = if let Some(id) = &arguments.id {
+                purge_selected(id, arguments.registry.as_deref())?
+            } else {
+                let now = if arguments.all {
+                    u64::MAX
+                } else {
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |duration| duration.as_secs())
+                };
+                purge_expired(now, arguments.registry.as_deref())?
+            };
+            if arguments.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "purged {} safety holds, {} reclaimed",
+                    report.purged.len(),
+                    human_bytes(report.purged_bytes)
+                );
+                for failure in &report.failures {
+                    eprintln!("failed: {failure}");
+                }
+            }
+            if !report.failures.is_empty() {
+                bail!("{} safety holds could not be purged", report.failures.len());
+            }
+            Ok(())
+        }
+    }
+}
+
+fn run_doctor() {
+    println!("devclean {}", env!("CARGO_PKG_VERSION"));
+    println!("default roots:");
+    for root in default_roots() {
+        println!("  {}", root.display());
+    }
+    println!("config search:");
+    for path in config_candidates() {
+        println!(
+            "  {} {}",
+            if path.is_file() {
+                "loaded"
+            } else {
+                "candidate"
+            },
+            path.display()
+        );
+    }
+    println!("tools:");
+    for tool in ["cargo", "docker", "git", "npm", "pnpm"] {
+        println!(
+            "  {tool:<8} {}",
+            if command_exists(tool) {
+                "available"
+            } else {
+                "not found"
+            }
+        );
+    }
+    println!("safety:");
+    println!("  scan is always read-only");
+    println!("  clean requires confirmation or --yes");
+    println!("  Git-tracked files are protected unless --allow-tracked is explicit");
+    println!("  candidates are atomically quarantined before recursive deletion");
+    println!("  symlinks, VCS metadata, backups, databases and volumes are protected");
+    println!("  --docker prunes build cache only; --docker-system never includes volumes");
+}
+
+fn scan_options(
+    arguments: &SharedScanArgs,
+    config: &Config,
+    categories: HashSet<Category>,
+    learning_mode: bool,
+) -> Result<ScanOptions> {
+    let roots = if !arguments.roots.is_empty() {
+        arguments
+            .roots
+            .iter()
+            .map(|path| expand_root(path))
+            .collect()
+    } else if !config.scan.roots.is_empty() {
+        config
+            .scan
+            .roots
+            .iter()
+            .map(|path| expand_root(path))
+            .collect()
+    } else {
+        default_roots()
+    };
+    let mut excludes = config.scan.exclude.clone();
+    excludes.extend(arguments.exclude.iter().cloned());
+    let older_than = arguments
+        .older_than
+        .as_deref()
+        .or(config.scan.older_than.as_deref())
+        .map(parse_age)
+        .transpose()?;
+    let min_size = arguments
+        .min_size
+        .as_deref()
+        .or(config.scan.min_size.as_deref())
+        .map(parse_bytes)
+        .transpose()?
+        .unwrap_or(0);
+
+    Ok(ScanOptions {
+        roots,
+        categories,
+        include_global_caches: arguments.global_caches,
+        include_expensive_caches: arguments.expensive_caches || config.clean.expensive_caches,
+        max_depth: arguments.max_depth.or(config.scan.max_depth).unwrap_or(24),
+        excludes,
+        older_than,
+        min_size,
+        protect_git_tracked: config.clean.protect_git_tracked && !arguments.allow_tracked,
+        learning_mode: if learning_mode {
+            LearningMode::Enabled
+        } else {
+            LearningMode::Disabled
+        },
+        approved_review_paths: arguments.approved_review_paths.iter().cloned().collect(),
+        custom_rules: config.rules.clone(),
+    })
+}
+
+fn select_categories(
+    arguments: &SharedScanArgs,
+    all: bool,
+    conservative_default: bool,
+) -> HashSet<Category> {
+    let mut categories: HashSet<Category> = if !arguments.category.is_empty() {
+        arguments.category.iter().copied().collect()
+    } else if all || !conservative_default {
+        Category::all().into_iter().collect()
+    } else {
+        Category::safe_defaults().into_iter().collect()
+    };
+    if arguments.global_caches {
+        categories.insert(Category::GlobalCache);
+    }
+    if arguments.expensive_caches {
+        categories.insert(Category::ExpensiveGlobalCache);
+    }
+    categories
+}
+
+fn expand_root(path: &Path) -> PathBuf {
+    let value = path.to_string_lossy();
+    if let Some(relative) = value.strip_prefix("~/") {
+        return directories::BaseDirs::new()
+            .map_or_else(|| path.to_path_buf(), |base| base.home_dir().join(relative));
+    }
+    path.to_path_buf()
+}
+
+fn limit_to_target_free(mut report: ScanReport, target: u64) -> Result<ScanReport> {
+    let root = report
+        .roots
+        .first()
+        .context("target-free requires at least one scan root")?;
+    let available = fs4::available_space(root)?;
+    let needed = target.saturating_sub(available);
+    if needed == 0 {
+        report.candidates.clear();
+        report.total_bytes = 0;
+        return Ok(report);
+    }
+    let mut selected = Vec::new();
+    let mut selected_bytes = 0_u64;
+    for candidate in report.candidates {
+        selected_bytes = selected_bytes.saturating_add(candidate.bytes);
+        selected.push(candidate);
+        if selected_bytes >= needed {
+            break;
+        }
+    }
+    report.candidates = selected;
+    report.total_bytes = selected_bytes;
+    Ok(report)
+}
+
+fn select_candidates(mut report: ScanReport) -> Result<ScanReport> {
+    if !io::stdin().is_terminal() {
+        bail!("--select requires an interactive terminal");
+    }
+    for (index, candidate) in report.candidates.iter().enumerate() {
+        println!(
+            "{:>4}. {:>10}  {}",
+            index + 1,
+            human_bytes(candidate.bytes),
+            candidate.path.display()
+        );
+    }
+    print!("Select candidates (example: 1,3-5 or all): ");
+    io::stdout().flush()?;
+    let mut response = String::new();
+    io::stdin().read_line(&mut response)?;
+    let indexes = parse_selection(response.trim(), report.candidates.len())?;
+    report.candidates = report
+        .candidates
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| indexes.contains(&(index + 1)).then_some(candidate))
+        .collect();
+    report.total_bytes = report
+        .candidates
+        .iter()
+        .map(|candidate| candidate.bytes)
+        .sum();
+    Ok(report)
+}
+
+fn select_exact_candidates(
+    mut report: ScanReport,
+    requested_paths: &[PathBuf],
+) -> Result<ScanReport> {
+    let requested: HashSet<PathBuf> = requested_paths
+        .iter()
+        .map(|path| path_identity(path))
+        .collect();
+    let found: HashSet<PathBuf> = report
+        .candidates
+        .iter()
+        .map(|candidate| path_identity(&candidate.path))
+        .filter(|path| requested.contains(path))
+        .collect();
+    let mut missing: Vec<_> = requested.difference(&found).collect();
+    missing.sort();
+    if let Some(path) = missing.first() {
+        bail!(
+            "selected path is no longer an eligible cleanup candidate: {}",
+            path.display()
+        );
+    }
+
+    report
+        .candidates
+        .retain(|candidate| requested.contains(&path_identity(&candidate.path)));
+    report.total_bytes = report
+        .candidates
+        .iter()
+        .map(|candidate| candidate.bytes)
+        .sum();
+    Ok(report)
+}
+
+fn path_identity(path: &Path) -> PathBuf {
+    let expanded = expand_root(path);
+    fs::canonicalize(&expanded).unwrap_or(expanded)
+}
+
+fn parse_selection(value: &str, maximum: usize) -> Result<HashSet<usize>> {
+    if value.eq_ignore_ascii_case("all") {
+        return Ok((1..=maximum).collect());
+    }
+    let mut selected = HashSet::new();
+    for part in value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        if let Some((start, end)) = part.split_once('-') {
+            let start = start.parse::<usize>()?;
+            let end = end.parse::<usize>()?;
+            if start == 0 || start > end || end > maximum {
+                bail!("selection range `{part}` is outside 1..={maximum}");
+            }
+            selected.extend(start..=end);
+        } else {
+            let index = part.parse::<usize>()?;
+            if index == 0 || index > maximum {
+                bail!("selection `{index}` is outside 1..={maximum}");
+            }
+            selected.insert(index);
+        }
+    }
+    if selected.is_empty() {
+        bail!("no candidates selected");
+    }
+    Ok(selected)
+}
+
+fn write_report(
+    report: &ScanReport,
+    format: OutputFormat,
+    path: Option<&Path>,
+    redact_paths: bool,
+) -> Result<()> {
+    let rendered = render_with_options(report, format, RenderOptions { redact_paths })?;
+    if let Some(path) = path {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+        }
+        fs::write(path, rendered).with_context(|| format!("failed to write {}", path.display()))?;
+    } else {
+        print!("{rendered}");
+    }
+    Ok(())
+}
+
+fn run_manpage(path: Option<&Path>) -> Result<()> {
+    let man = clap_mangen::Man::new(Cli::command());
+    if let Some(path) = path {
+        let mut file = fs::File::create(path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+        man.render(&mut file)?;
+    } else {
+        man.render(&mut io::stdout())?;
+    }
+    Ok(())
+}
+
+fn format_expiry(expires_at_unix: u64) -> String {
+    // humantime cannot render RFC 3339 beyond year 9999 and would panic through Display.
+    const RFC3339_MAX_SECONDS: u64 = 253_402_300_800;
+    if expires_at_unix >= RFC3339_MAX_SECONDS {
+        return expires_at_unix.to_string();
+    }
+    UNIX_EPOCH
+        .checked_add(std::time::Duration::from_secs(expires_at_unix))
+        .map_or_else(
+            || expires_at_unix.to_string(),
+            |timestamp| humantime::format_rfc3339_seconds(timestamp).to_string(),
+        )
+}
+
+fn confirm(assume_yes: bool) -> Result<()> {
+    if assume_yes {
+        return Ok(());
+    }
+    if !io::stdin().is_terminal() {
+        bail!("refusing non-interactive cleanup without --yes");
+    }
+    print!("Type DELETE to remove the listed artifacts: ");
+    io::stdout().flush()?;
+    let mut response = String::new();
+    io::stdin().read_line(&mut response)?;
+    if response.trim() != "DELETE" {
+        bail!("cleanup cancelled");
+    }
+    Ok(())
+}
+
+fn command_exists(command: &str) -> bool {
+    Command::new(command)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn history_database_override() -> Option<PathBuf> {
+    env::var_os("DEVCLEAN_HISTORY_DB").map(PathBuf::from)
+}
+
+fn history_recording_enabled() -> bool {
+    !cfg!(debug_assertions) || env::var_os("DEVCLEAN_HISTORY_IN_DEBUG").is_some()
+}
+
+fn record_scan_history(report: &ScanReport) {
+    if history_recording_enabled() {
+        if let Err(error) =
+            devclean::history::record_scan(report, history_database_override().as_deref())
+        {
+            eprintln!("warning: failed to record scan history: {error:#}");
+        }
+    }
+}
+
+fn record_cleanup_history(report: &devclean::CleanReport) {
+    if history_recording_enabled() {
+        if let Err(error) =
+            devclean::history::record_cleanup(report, history_database_override().as_deref())
+        {
+            eprintln!("warning: failed to record cleanup history: {error:#}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_expiry_should_render_rfc3339() {
+        assert_eq!(format_expiry(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn format_expiry_should_fall_back_to_seconds_beyond_year_9999() {
+        assert_eq!(format_expiry(u64::MAX), u64::MAX.to_string());
+        assert_eq!(format_expiry(253_402_300_800), "253402300800");
+    }
+
+    #[test]
+    fn parse_selection_should_accept_ranges() -> Result<()> {
+        let selected = parse_selection("1,3-5", 5)?;
+
+        assert_eq!(selected, HashSet::from([1, 3, 4, 5]));
+        Ok(())
+    }
+
+    #[test]
+    fn parse_selection_should_reject_out_of_range_value() {
+        assert!(parse_selection("6", 5).is_err());
+    }
+
+    #[test]
+    fn exact_selection_should_reject_stale_path() {
+        let report = ScanReport {
+            roots: vec![PathBuf::from("/tmp/project")],
+            candidates: Vec::new(),
+            review_candidates: Vec::new(),
+            learning_observations: Vec::new(),
+            warnings: Vec::new(),
+            total_bytes: 0,
+            review_total_bytes: 0,
+            observed_total_bytes: 0,
+            protect_git_tracked: true,
+        };
+
+        assert!(
+            select_exact_candidates(report, &[PathBuf::from("/tmp/project/node_modules")]).is_err()
+        );
+    }
+}

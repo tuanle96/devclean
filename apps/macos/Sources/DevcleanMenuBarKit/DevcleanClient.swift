@@ -16,46 +16,79 @@ public protocol CommandExecuting: Sendable {
     func run(executable: URL, arguments: [String]) async throws -> CommandResult
 }
 
+/// Holds the running process so a cancelled parent Task can terminate it, which is
+/// what lets the menu bar "Cancel" actually stop a long scan instead of leaving a
+/// zombie helper running while the UI reports idle.
+private final class ProcessHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    /// Stores the process and reports whether it may still be launched.
+    func store(_ process: Process) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        self.process = process
+        return !cancelled
+    }
+
+    func terminate() {
+        lock.lock()
+        defer { lock.unlock() }
+        cancelled = true
+        if let process, process.isRunning {
+            process.terminate()
+        }
+    }
+}
+
 public struct FoundationCommandExecutor: CommandExecuting {
     public init() {}
 
     public func run(executable: URL, arguments: [String]) async throws -> CommandResult {
-        try await Task.detached(priority: .userInitiated) {
-            let fileManager = FileManager.default
-            let directory = fileManager.temporaryDirectory
-                .appendingPathComponent("devclean-process-\(UUID().uuidString)", isDirectory: true)
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            defer { try? fileManager.removeItem(at: directory) }
+        let holder = ProcessHolder()
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .userInitiated) {
+                let fileManager = FileManager.default
+                let directory = fileManager.temporaryDirectory
+                    .appendingPathComponent(
+                        "devclean-process-\(UUID().uuidString)", isDirectory: true)
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+                defer { try? fileManager.removeItem(at: directory) }
 
-            let stdoutURL = directory.appendingPathComponent("stdout")
-            let stderrURL = directory.appendingPathComponent("stderr")
-            fileManager.createFile(atPath: stdoutURL.path, contents: nil)
-            fileManager.createFile(atPath: stderrURL.path, contents: nil)
-            let stdout = try FileHandle(forWritingTo: stdoutURL)
-            let stderr = try FileHandle(forWritingTo: stderrURL)
-            defer {
-                try? stdout.close()
-                try? stderr.close()
-            }
+                let stdoutURL = directory.appendingPathComponent("stdout")
+                let stderrURL = directory.appendingPathComponent("stderr")
+                fileManager.createFile(atPath: stdoutURL.path, contents: nil)
+                fileManager.createFile(atPath: stderrURL.path, contents: nil)
+                let stdout = try FileHandle(forWritingTo: stdoutURL)
+                let stderr = try FileHandle(forWritingTo: stderrURL)
+                defer {
+                    try? stdout.close()
+                    try? stderr.close()
+                }
 
-            let process = Process()
-            process.executableURL = executable
-            process.arguments = arguments
-            process.standardOutput = stdout
-            process.standardError = stderr
-            try process.run()
-            process.waitUntilExit()
-            try stdout.synchronize()
-            try stderr.synchronize()
+                let process = Process()
+                process.executableURL = executable
+                process.arguments = arguments
+                process.standardOutput = stdout
+                process.standardError = stderr
+                guard holder.store(process) else { throw CancellationError() }
+                try process.run()
+                process.waitUntilExit()
+                try stdout.synchronize()
+                try stderr.synchronize()
 
-            let outputData = try Data(contentsOf: stdoutURL)
-            let errorData = try Data(contentsOf: stderrURL)
-            return CommandResult(
-                status: process.terminationStatus,
-                standardOutput: String(decoding: outputData, as: UTF8.self),
-                standardError: String(decoding: errorData, as: UTF8.self)
-            )
-        }.value
+                let outputData = try Data(contentsOf: stdoutURL)
+                let errorData = try Data(contentsOf: stderrURL)
+                return CommandResult(
+                    status: process.terminationStatus,
+                    standardOutput: String(decoding: outputData, as: UTF8.self),
+                    standardError: String(decoding: errorData, as: UTF8.self)
+                )
+            }.value
+        } onCancel: {
+            holder.terminate()
+        }
     }
 }
 
@@ -64,10 +97,12 @@ public enum DevcleanArguments {
         settings: ScanSettings,
         approvedReviewPaths: [String] = []
     ) -> [String] {
-        var arguments = ["scan"] + shared(
-            settings: settings,
-            approvedReviewPaths: approvedReviewPaths
-        )
+        var arguments =
+            ["scan"]
+            + shared(
+                settings: settings,
+                approvedReviewPaths: approvedReviewPaths
+            )
         if settings.learningMode {
             arguments.append("--learning")
         }
@@ -79,10 +114,12 @@ public enum DevcleanArguments {
         settings: ScanSettings,
         approvedReviewPaths: [String] = []
     ) -> [String] {
-        var arguments = ["clean"] + shared(
-            settings: settings,
-            approvedReviewPaths: approvedReviewPaths
-        )
+        var arguments =
+            ["clean"]
+            + shared(
+                settings: settings,
+                approvedReviewPaths: approvedReviewPaths
+            )
         for path in paths.sorted() {
             arguments += ["--only-path", path]
         }
@@ -95,6 +132,11 @@ public enum DevcleanArguments {
 
     public static let listQuarantine = ["quarantine", "list", "--json"]
     public static let purgeExpiredQuarantine = ["quarantine", "purge", "--json"]
+    public static let purgeAllQuarantine = ["quarantine", "purge", "--all", "--json"]
+
+    public static func purgeQuarantine(id: String) -> [String] {
+        ["quarantine", "purge", "--id", id, "--json"]
+    }
 
     public static func restoreQuarantine(id: String) -> [String] {
         ["quarantine", "restore", id]
@@ -154,9 +196,9 @@ public enum DevcleanClientError: LocalizedError, Equatable, Sendable {
         switch self {
         case .executableNotFound:
             "The bundled devclean helper could not be found."
-        case let .commandFailed(message):
+        case .commandFailed(let message):
             message
-        case let .invalidReport(message):
+        case .invalidReport(let message):
             "devclean returned an invalid scan report: \(message)"
         }
     }
@@ -220,6 +262,30 @@ public actor DevcleanClient {
 
     public func purgeExpiredQuarantine() async throws -> QuarantinePurgeReport {
         let result = try await execute(DevcleanArguments.purgeExpiredQuarantine)
+        do {
+            return try JSONDecoder().decode(
+                QuarantinePurgeReport.self,
+                from: Data(result.standardOutput.utf8)
+            )
+        } catch {
+            throw DevcleanClientError.invalidReport(error.localizedDescription)
+        }
+    }
+
+    public func purgeAllQuarantine() async throws -> QuarantinePurgeReport {
+        let result = try await execute(DevcleanArguments.purgeAllQuarantine)
+        do {
+            return try JSONDecoder().decode(
+                QuarantinePurgeReport.self,
+                from: Data(result.standardOutput.utf8)
+            )
+        } catch {
+            throw DevcleanClientError.invalidReport(error.localizedDescription)
+        }
+    }
+
+    public func purgeQuarantine(id: String) async throws -> QuarantinePurgeReport {
+        let result = try await execute(DevcleanArguments.purgeQuarantine(id: id))
         do {
             return try JSONDecoder().decode(
                 QuarantinePurgeReport.self,

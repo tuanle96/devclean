@@ -1,6 +1,6 @@
 ---
 name: dev-disk-cleaner
-description: Audit and safely clean disk space consumed by rebuildable development artifacts, including Rust targets, node_modules, framework/build/test outputs, package caches, model/runtime caches, and unused Docker data. Use when a development machine is low on disk, System Data is unexpectedly large, generated directories have accumulated, or the user asks to scan, explain, selectively reclaim, or automate developer storage cleanup.
+description: Audit and safely clean disk space consumed by rebuildable development artifacts, including Rust targets, node_modules, Python environments/caches, framework/build/test outputs, package caches, model/runtime caches, and unused Docker data. Use when a development machine is low on disk, System Data is unexpectedly large, generated directories have accumulated, or the user asks to scan, explain, selectively reclaim, or automate developer storage cleanup.
 ---
 
 # Dev Disk Cleaner
@@ -26,7 +26,7 @@ Replace `<skill-dir>` with this skill's absolute directory. If the launcher cann
 ## Audit
 
 ```bash
-<skill-dir>/scripts/devclean scan --all --global-caches --docker \
+<skill-dir>/scripts/devclean scan --global-caches --docker \
   --format html --output <output-dir>/devclean-audit.html \
   <root> [<root> ...]
 ```
@@ -35,11 +35,15 @@ Add `--redact-paths` before sharing a report. Use `--older-than` and `--min-size
 
 For a multi-day evaluation, run `scan --learning --format json`. Known active artifacts may appear in `learning_observations` even when age filters keep them out of `candidates`. Unknown cache-like directories appear only in `review_candidates`. Pass `--approve-review-path` only when the report contains a `suggested_rule` and the user approves that exact path; Rust will refuse arbitrary approvals.
 
+For continuous read-only monitoring, run `watch --threshold 5GiB --interval 1h`. Watch mode may notify, but it never cleans automatically. Use `--once --no-notify` for scheduled verification jobs that should print one threshold check and exit.
+
 ## Cleanup profiles
 
 Use conservative cleanup for Rust targets, JavaScript dependencies, and framework caches:
 
 ```bash
+<skill-dir>/scripts/devclean clean --dry-run <root> [<root> ...]
+
 <skill-dir>/scripts/devclean clean --select \
   --report <output-dir>/devclean-before.html \
   <root> [<root> ...]
@@ -57,6 +61,8 @@ Use comprehensive cleanup only when build/test output and global caches are auth
 Use `--target-free <SIZE>` when the user specifies a free-space goal. Use explicit `--category`, `--exclude`, or `--config` when authorization is path- or project-specific.
 
 Use `--quarantine-for 7d` when the user prioritizes recovery over immediate reclamation. Explain that a persistent safety hold still consumes disk until `quarantine purge`. Use `quarantine list`, `restore <ID>`, and `purge` rather than manipulating `.devclean-quarantine-*` paths directly.
+
+Use `clean --undo <ID>` only as the exact shorthand for `quarantine restore <ID>`; it never means “restore the most recent hold” implicitly.
 
 ## Expensive and Docker data
 
@@ -80,7 +86,7 @@ Use `--quarantine-for 7d` when the user prioritizes recovery over immediate recl
 
 ```bash
 df -h
-<skill-dir>/scripts/devclean scan --all --global-caches <root> [<root> ...]
+<skill-dir>/scripts/devclean scan --global-caches <root> [<root> ...]
 docker volume ls
 docker system df
 ```

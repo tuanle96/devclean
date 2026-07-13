@@ -4,6 +4,53 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-13
+
+### Added
+
+- `devclean clean --dry-run` renders the exact filtered plan without confirmation, Docker invocation, quarantine, or deletion; `clean --undo <ID>` restores one exact safety hold as a quarantine shorthand.
+- Safe-default Python cleanup for `__pycache__`, project-local `.tox`/`.nox`, and `.venv`/`venv` directories directly backed by a Python dependency or project manifest.
+- Read-only `devclean watch` mode backed by native filesystem events, configurable threshold/scan interval, best-effort desktop notifications, and a deterministic `--once` mode for launch agents and verification.
+- Build-output detection for Gradle/Kotlin, CMake, and Zig projects plus custom absolute `GOMODCACHE` locations.
+- Structured Docker disk-usage parsing and an injectable command boundary for unit tests.
+- Optional on-device AI Insights use Apple's Foundation Models framework on supported Macs to explain compact review facts with typed output; the model receives no full paths and has no cleanup, approval, hold, restore, or purge tools.
+- OpenAI-compatible AI Insights initially support DeepSeek V4 Flash with strict JSON output, HTTPS-only endpoints, synthetic contract verification, explicit remote-processing disclosure, and API keys stored in macOS Keychain.
+- The macOS cleanup confirmation now offers an explicit `Delete Now` path with a second irreversible-action confirmation, and Settings can permanently delete one exact safety hold or all listed holds immediately through separately confirmed actions.
+- `devclean quarantine purge --id <ID>` permanently deletes one exact safety hold before or after expiry for trusted native clients and automation.
+- The macOS companion is now branded `DevCleaner`, ships a HIG-scaled disk-and-sparkle app icon, and packages as `DevCleaner.app` while preserving the existing bundle identifier and local data paths.
+- The macOS menu bar app now registers with macOS Launch at Login on first launch, exposes an approval-aware Settings toggle, and remains user-disableable. The Homebrew Cask opens the app after installation so registration happens immediately.
+- Scanner-owned Learning Mode rules for Xcode `DerivedData`, Gradle `.gradle`, and CocoaPods `Pods` directories, using the same exact-path approval and pre-deletion revalidation flow as SwiftPM `.build`. The Gradle rule refuses the global `~/.gradle`, which can hold credentials; CocoaPods requires both `Podfile` and `Podfile.lock` so exact dependency versions remain reproducible.
+- JSONL reports stream `learning_observation` events and count them in the summary event.
+- Scheduled fuzz coverage for the duration/size filter parsers and a strict `swift format lint` gate in CI.
+- Read-only `devclean tui` candidate browser with project grouping, category capacity bars, checkbox selection, and command preview; it never performs deletion itself.
+- Platform-native `devclean schedule install/list/remove` with mandatory cleanup authority, dry-run installation preview, and structured JSONL cleanup results.
+- Aggregate local SQLite scan and cleanup history plus `devclean stats` table, JSON, and HTML reports; candidate paths are deliberately not persisted.
+- Repository-first `.devclean.toml`, `devclean init`, validated shared-config fetch from a Git URL or local checkout, and marker-backed custom cleanup rules that are revalidated before deletion.
+- A VS Code status-bar companion with read-only scan/report/preview commands and a separately confirmed cleanup command.
+
+### Changed
+
+- The user-facing Learning Mode is now named Observation & Approvals, and Safety Hold retention is configured independently so disabling observation never silently changes cleanup into immediate deletion.
+- The macOS menu now separates Clean, Review, and Holds into task-focused sections, prioritizes held disk space when no safe candidates remain, and exposes restore or separately confirmed permanent-delete actions beside each safety hold.
+- Opening Settings from the menu bar now activates DevCleaner and promotes the titled Settings window to the key/front window instead of leaving it behind the MenuBarExtra popover or another app.
+- Busy cleanup states in the macOS menu now replace the destructive controls with an explicit Hold, refresh, scan, or restore activity label; candidate selection stays locked until the refreshed result is ready.
+- Cleanup confirmation now renders inside the MenuBarExtra window, preventing the popover from dismissing the system dialog before its Hold/Clean action can receive a click.
+- Candidate size measurement uses Rayon's indexed parallel iterator, preserving deterministic result order. Performance evidence is reported as repeated-run medians because filesystem cache and background I/O can dominate a single large-tree scan.
+- Git repository-root discovery is cached across scan and cleanup validation, report category totals are deterministically ordered, and quarantine identifiers use UUID v4 values.
+- The Rust binary entrypoint and scanner measurement implementation are split into focused modules.
+- The Swift menu UI now splits candidate, review, safety-hold, confirmation-state, and app-state components into focused source files.
+- HTML report rendering now uses autoescaped MiniJinja templates instead of inline string concatenation.
+- Quarantine expiry is printed as an RFC 3339 timestamp instead of raw Unix seconds.
+- Terminal tables align the category column correctly.
+- Default scan roots are `~/Dev` and `~/Projects`; configure additional roots in `devclean.toml`.
+- The unknown scanner rules of a newer bundled helper no longer fail report decoding in the menu bar app, and learning state written by a newer app version keeps its known entries instead of resetting.
+- Replaced the unmaintained `fs2` dependency with `fs4`.
+
+### Documentation
+
+- Clarified that `scan` always includes every rebuildable filesystem category and `--all` is accepted only for symmetry with `clean`.
+- Documented the deliberate absence of the App Sandbox in the menu bar app.
+
 ## [0.4.1] - 2026-07-11
 
 ### Added
@@ -91,7 +138,8 @@ All notable changes to this project are documented here following [Keep a Change
 - Conservative and comprehensive cleanup profiles.
 - Evidence-based artifact detection, global cache cleanup, Docker cleanup, and companion Codex skill.
 
-[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/tuanle96/devclean/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/tuanle96/devclean/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/tuanle96/devclean/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/tuanle96/devclean/compare/v0.3.0...v0.3.1

@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use directories::BaseDirs;
 use serde::Deserialize;
 
+use crate::model::CustomRule;
+
 /// User configuration loaded from `devclean.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -15,6 +17,29 @@ pub struct Config {
     pub scan: ScanConfig,
     /// Destructive cleanup settings.
     pub clean: CleanConfig,
+    /// Read-only filesystem watcher settings.
+    pub watch: WatchConfig,
+    /// Declarative project-local scanner extensions.
+    pub rules: Vec<CustomRule>,
+}
+
+/// Settings for the read-only filesystem watcher.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WatchConfig {
+    /// Notify when reclaimable artifacts reach this size.
+    pub threshold: String,
+    /// Minimum duration between event-triggered scans.
+    pub interval: String,
+}
+
+impl Default for WatchConfig {
+    fn default() -> Self {
+        Self {
+            threshold: "5GiB".to_owned(),
+            interval: "1h".to_owned(),
+        }
+    }
 }
 
 /// Settings that affect candidate discovery.
@@ -57,6 +82,7 @@ impl Default for CleanConfig {
 pub fn config_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(current) = env::current_dir() {
+        candidates.push(current.join(".devclean.toml"));
         candidates.push(current.join("devclean.toml"));
     }
     if let Some(base) = BaseDirs::new() {
@@ -81,7 +107,42 @@ pub fn load_config(explicit: Option<&Path>) -> Result<Config> {
     };
     let content = fs::read_to_string(&path)
         .with_context(|| format!("failed to read config {}", path.display()))?;
-    toml::from_str(&content).with_context(|| format!("invalid config {}", path.display()))
+    let config: Config =
+        toml::from_str(&content).with_context(|| format!("invalid config {}", path.display()))?;
+    validate_custom_rules(&config.rules)?;
+    Ok(config)
+}
+
+fn validate_custom_rules(rules: &[CustomRule]) -> Result<()> {
+    for rule in rules {
+        anyhow::ensure!(
+            !rule.name.trim().is_empty(),
+            "custom rule name cannot be empty"
+        );
+        anyhow::ensure!(
+            !rule.directory_names.is_empty(),
+            "custom rule `{}` needs at least one directory name",
+            rule.name
+        );
+        anyhow::ensure!(
+            !rule.required_markers.is_empty(),
+            "custom rule `{}` needs at least one direct marker",
+            rule.name
+        );
+        for value in rule.directory_names.iter().chain(&rule.required_markers) {
+            let candidate = Path::new(value);
+            anyhow::ensure!(
+                candidate.components().count() == 1
+                    && matches!(
+                        candidate.components().next(),
+                        Some(std::path::Component::Normal(_))
+                    ),
+                "custom rule `{}` contains unsafe name `{value}`",
+                rule.name
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Parses a human duration such as `12h`, `30d`, or `3weeks`.
@@ -116,5 +177,18 @@ mod tests {
     fn parse_bytes_should_accept_binary_units() -> Result<()> {
         assert_eq!(parse_bytes("2GiB")?, 2 * 1024 * 1024 * 1024);
         Ok(())
+    }
+
+    #[test]
+    fn custom_rules_should_require_exact_names_and_direct_markers() {
+        let invalid = CustomRule {
+            name: "unsafe".to_owned(),
+            category: crate::model::Category::BuildOutput,
+            directory_names: vec!["../dist".to_owned()],
+            required_markers: vec!["package.json".to_owned()],
+            reason: "generated output".to_owned(),
+        };
+
+        assert!(validate_custom_rules(&[invalid]).is_err());
     }
 }

@@ -4,19 +4,18 @@ use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use directories::BaseDirs;
-use fs2::FileExt;
+use fs4::FileExt;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::model::Category;
 
 const STORE_VERSION: u32 = 1;
 const QUARANTINE_PREFIX: &str = ".devclean-quarantine-";
-static ENTRY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// One restorable artifact held beside its original location.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +88,7 @@ pub fn hold(
     }
     let parent = path.parent().context("candidate has no parent directory")?;
     let now = unix_time(SystemTime::now());
-    let id = next_id(now);
+    let id = next_id();
     let quarantine_path = parent.join(format!("{QUARANTINE_PREFIX}{id}"));
     if quarantine_path.exists() {
         bail!("unique quarantine path unexpectedly exists");
@@ -214,6 +213,43 @@ pub fn purge_expired(now_unix: u64, registry_path: Option<&Path>) -> Result<Purg
     Ok(report)
 }
 
+/// Permanently deletes one explicitly selected safety hold before or after expiry.
+///
+/// # Errors
+///
+/// Returns an error when the identifier is unknown or the registry cannot be loaded or saved.
+/// A validation or filesystem deletion failure is returned in [`PurgeReport::failures`].
+pub fn purge_selected(id: &str, registry_path: Option<&Path>) -> Result<PurgeReport> {
+    let registry =
+        registry_path.map_or_else(default_registry_path, |value| Ok(value.to_path_buf()))?;
+    let mut report = PurgeReport::default();
+    update_store(&registry, |store| {
+        let index = store
+            .entries
+            .iter()
+            .position(|entry| entry.id == id)
+            .with_context(|| format!("unknown quarantine id `{id}`"))?;
+        let entry = store.entries[index].clone();
+        if !entry.quarantine_path.exists() {
+            store.entries.remove(index);
+            return Ok(());
+        }
+        if let Err(error) = validate_entry(&entry)
+            .and_then(|()| fs::remove_dir_all(&entry.quarantine_path).map_err(Into::into))
+        {
+            report
+                .failures
+                .push(format!("{}: {error:#}", entry.quarantine_path.display()));
+            return Ok(());
+        }
+        store.entries.remove(index);
+        report.purged_bytes = entry.bytes;
+        report.purged.push(entry);
+        Ok(())
+    })?;
+    Ok(report)
+}
+
 fn validate_entry(entry: &QuarantineEntry) -> Result<()> {
     let expected_parent = entry
         .original_path
@@ -242,7 +278,7 @@ fn update_store(
     fs::create_dir_all(parent)?;
     let lock_path = registry_path.with_extension("lock");
     let lock = open_private(&lock_path)?;
-    lock.lock_exclusive()?;
+    FileExt::lock(&lock)?;
 
     let mut store = if registry_path.is_file() {
         let content = fs::read(registry_path)?;
@@ -298,9 +334,8 @@ fn open_private(path: &Path) -> Result<File> {
         .with_context(|| format!("failed to open {}", path.display()))
 }
 
-fn next_id(now: u64) -> String {
-    let sequence = ENTRY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("{now:x}-{:x}-{sequence:x}", std::process::id())
+fn next_id() -> String {
+    Uuid::new_v4().to_string()
 }
 
 fn unix_time(value: SystemTime) -> u64 {
@@ -354,6 +389,60 @@ mod tests {
 
         assert_eq!(report.purged_bytes, 99);
         assert!(!entry.quarantine_path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn purge_selected_should_delete_only_requested_hold() -> Result<()> {
+        let temporary = tempdir()?;
+        let first = temporary.path().join("first/target");
+        let second = temporary.path().join("second/target");
+        fs::create_dir_all(&first)?;
+        fs::create_dir_all(&second)?;
+        let registry = temporary.path().join("state/quarantine.json");
+        let first_entry = hold(
+            &first,
+            Category::RustTarget,
+            40,
+            Duration::from_secs(60),
+            Some(&registry),
+        )?;
+        let second_entry = hold(
+            &second,
+            Category::RustTarget,
+            60,
+            Duration::from_secs(60),
+            Some(&registry),
+        )?;
+
+        let report = purge_selected(&first_entry.id, Some(&registry))?;
+
+        assert_eq!(report.purged_bytes, 40);
+        assert!(!first_entry.quarantine_path.exists());
+        assert!(second_entry.quarantine_path.exists());
+        assert_eq!(list(Some(&registry))?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn purge_selected_should_refuse_unknown_id_without_deleting_holds() -> Result<()> {
+        let temporary = tempdir()?;
+        let original = temporary.path().join("target");
+        fs::create_dir_all(&original)?;
+        let registry = temporary.path().join("state/quarantine.json");
+        let entry = hold(
+            &original,
+            Category::RustTarget,
+            99,
+            Duration::from_secs(60),
+            Some(&registry),
+        )?;
+
+        let result = purge_selected("missing", Some(&registry));
+
+        assert!(result.is_err());
+        assert!(entry.quarantine_path.exists());
+        assert_eq!(list(Some(&registry))?.len(), 1);
         Ok(())
     }
 

@@ -145,14 +145,15 @@ jobs:
         run: apps/macos/scripts/build-app.sh
       - name: Verify universal app
         run: |
-          codesign --verify --deep --strict --verbose=2 dist/Devclean.app
-          lipo -archs dist/Devclean.app/Contents/MacOS/DevcleanMenuBar | grep arm64
-          lipo -archs dist/Devclean.app/Contents/MacOS/DevcleanMenuBar | grep x86_64
-          lipo -archs dist/Devclean.app/Contents/Helpers/devclean | grep arm64
-          lipo -archs dist/Devclean.app/Contents/Helpers/devclean | grep x86_64
-          codesign -dvvv dist/Devclean.app 2>&1 | grep 'Authority=Developer ID Application'
-          codesign -dvvv dist/Devclean.app 2>&1 | grep 'TeamIdentifier=VGQU7EVXZV'
-          codesign -dvvv dist/Devclean.app 2>&1 | grep 'Runtime Version='
+          codesign --verify --deep --strict --verbose=2 dist/DevCleaner.app
+          test -f dist/DevCleaner.app/Contents/Resources/AppIcon.icns
+          lipo -archs dist/DevCleaner.app/Contents/MacOS/DevcleanMenuBar | grep arm64
+          lipo -archs dist/DevCleaner.app/Contents/MacOS/DevcleanMenuBar | grep x86_64
+          lipo -archs dist/DevCleaner.app/Contents/Helpers/devclean | grep arm64
+          lipo -archs dist/DevCleaner.app/Contents/Helpers/devclean | grep x86_64
+          codesign -dvvv dist/DevCleaner.app 2>&1 | grep 'Authority=Developer ID Application'
+          codesign -dvvv dist/DevCleaner.app 2>&1 | grep 'TeamIdentifier=VGQU7EVXZV'
+          codesign -dvvv dist/DevCleaner.app 2>&1 | grep 'Runtime Version='
       - name: Notarize and staple app
         env:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -166,20 +167,20 @@ jobs:
           result="$RUNNER_TEMP/notarization-result.json"
           printf '%s' "$APPLE_API_KEY" > "$api_key_path"
           chmod 600 "$api_key_path"
-          ditto -c -k --keepParent dist/Devclean.app "$submission"
+          ditto -c -k --keepParent dist/DevCleaner.app "$submission"
           xcrun notarytool submit "$submission" \
             --key "$api_key_path" \
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER" \
             --wait --output-format json > "$result"
           jq -e '.status == "Accepted"' "$result"
-          xcrun stapler staple dist/Devclean.app
-          xcrun stapler validate dist/Devclean.app
-          codesign --verify --deep --strict --verbose=2 dist/Devclean.app
-          spctl --assess --type execute --verbose=4 dist/Devclean.app
+          xcrun stapler staple dist/DevCleaner.app
+          xcrun stapler validate dist/DevCleaner.app
+          codesign --verify --deep --strict --verbose=2 dist/DevCleaner.app
+          spctl --assess --type execute --verbose=4 dist/DevCleaner.app
           rm -f "$api_key_path" "$submission" "$result"
       - name: Package app bundle
-        run: ditto -c -k --sequesterRsrc --keepParent dist/Devclean.app devclean-menubar-macos-universal.zip
+        run: ditto -c -k --sequesterRsrc --keepParent dist/DevCleaner.app devclean-menubar-macos-universal.zip
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: devclean-menubar-macos-universal.zip

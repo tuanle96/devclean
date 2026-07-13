@@ -1,20 +1,19 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use directories::BaseDirs;
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::model::{Candidate, Category, ScanReport};
-use crate::policy::contains_git_tracked_files;
+use crate::policy::GitTrackedGuard;
 use crate::quarantine::{QuarantineEntry, hold};
 use crate::scanner::{
     classify, classify_approved_review_candidate, expensive_global_cache_paths, global_cache_paths,
+    matches_custom_rule,
 };
-
-static QUARANTINE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Outcome of deleting a validated scan report.
 #[derive(Debug, Serialize)]
@@ -52,6 +51,7 @@ pub fn clean_with_options(scan_report: &ScanReport, options: &CleanOptions) -> C
     let mut removed = Vec::new();
     let mut quarantined = Vec::new();
     let mut failures = Vec::new();
+    let mut git_guard = GitTrackedGuard::default();
     let allowed_global = BaseDirs::new().map_or_else(Vec::new, |base| {
         let mut paths = global_cache_paths(base.home_dir());
         paths.extend(expensive_global_cache_paths(base.home_dir()));
@@ -64,6 +64,7 @@ pub fn clean_with_options(scan_report: &ScanReport, options: &CleanOptions) -> C
             &scan_report.roots,
             &allowed_global,
             scan_report.protect_git_tracked,
+            &mut git_guard,
         ) {
             failures.push(format!("{}: {error}", candidate.path.display()));
             continue;
@@ -103,6 +104,7 @@ fn validate_candidate(
     roots: &[PathBuf],
     allowed_global: &[PathBuf],
     protect_git_tracked: bool,
+    git_guard: &mut GitTrackedGuard,
 ) -> Result<(), String> {
     let metadata = fs::symlink_metadata(&candidate.path).map_err(|error| error.to_string())?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -127,18 +129,25 @@ fn validate_candidate(
         return Err("candidate escaped the configured roots".to_owned());
     }
 
-    let current = candidate.approved_rule.map_or_else(
-        || classify(&candidate.path),
-        |rule| classify_approved_review_candidate(&candidate.path, rule),
-    );
-    let Some((current_category, _)) = current else {
+    let current_category = if let Some(rule) = &candidate.custom_rule {
+        matches_custom_rule(&candidate.path, rule).then_some(rule.category)
+    } else {
+        candidate
+            .approved_rule
+            .map_or_else(
+                || classify(&candidate.path),
+                |rule| classify_approved_review_candidate(&candidate.path, rule),
+            )
+            .map(|(category, _)| category)
+    };
+    let Some(current_category) = current_category else {
         return Err("candidate no longer matches a rebuildable artifact".to_owned());
     };
     if current_category != candidate.category {
         return Err("candidate category changed after scanning".to_owned());
     }
     if protect_git_tracked {
-        match contains_git_tracked_files(&candidate.path) {
+        match git_guard.contains_tracked_files(&candidate.path) {
             Ok(true) => return Err("candidate now contains Git-tracked files".to_owned()),
             Ok(false) => {}
             Err(error) => return Err(format!("Git tracked-file guard failed: {error:#}")),
@@ -151,14 +160,7 @@ fn quarantine_and_remove(path: &Path) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("candidate has no parent directory"))?;
-    let sequence = QUARANTINE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    let quarantine = parent.join(format!(
-        ".devclean-quarantine-{}-{timestamp}-{sequence}",
-        std::process::id()
-    ));
+    let quarantine = parent.join(format!(".devclean-quarantine-{}", Uuid::new_v4()));
     if quarantine.exists() {
         bail!("unique quarantine path unexpectedly exists");
     }
@@ -201,6 +203,7 @@ mod tests {
             protect_git_tracked: false,
             learning_mode: LearningMode::Disabled,
             approved_review_paths: HashSet::new(),
+            custom_rules: Vec::new(),
         }
     }
 

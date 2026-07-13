@@ -1,0 +1,50 @@
+{
+  "name": "devclean",
+  "displayName": "DevCleaner",
+  "description": "Read-only developer artifact status with explicitly confirmed cleanup.",
+  "version": "0.1.0",
+  "publisher": "tuanle96",
+  "license": "MIT",
+  "engines": { "vscode": "^1.95.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "devclean.scan", "title": "DevCleaner: Scan Workspace" },
+      { "command": "devclean.openReport", "title": "DevCleaner: Open HTML Report" },
+      { "command": "devclean.dryRun", "title": "DevCleaner: Preview Cleanup" },
+      { "command": "devclean.clean", "title": "DevCleaner: Clean After Confirmation" }
+    ],
+    "configuration": {
+      "title": "DevCleaner",
+      "properties": {
+        "devclean.executable": {
+          "type": "string",
+          "default": "devclean",
+          "description": "Path to the devclean executable."
+        },
+        "devclean.olderThan": {
+          "type": "string",
+          "default": "7d",
+          "description": "Minimum candidate age."
+        },
+        "devclean.minSize": {
+          "type": "string",
+          "default": "100MiB",
+          "description": "Minimum candidate size."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "check": "tsc -p . --noEmit",
+    "test": "npm run build && node --test dist/commands.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "@types/vscode": "1.95.0",
+    "typescript": "5.7.3"
+  }
+}

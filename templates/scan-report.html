@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>devclean scan report</title>
+  <style>
+    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui;background:#08111f;color:#ecf3ff}body{margin:0}main{max-width:1180px;margin:auto;padding:48px 24px}h1{font-size:42px;margin-bottom:8px}.lead{color:#aebdd2}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:28px 0}article{background:#111d31;border:1px solid #263854;border-radius:14px;padding:16px}article span{display:block;color:#94a7c2;font-size:12px}article strong{font-size:22px}.total{color:#5fe0a5}.review{color:#ffcf72}.table{overflow:auto;border:1px solid #263854;border-radius:14px}table{width:100%;border-collapse:collapse;min-width:900px}th,td{padding:12px;text-align:left;border-bottom:1px solid #263854}th{background:#15233a;color:#cbd9ed}td{color:#b7c5da}code{color:#dbe9ff}.warnings{color:#ffcf72}
+  </style>
+</head>
+<body>
+<main>
+  <h1>devclean scan</h1>
+  <p class="lead">Read-only inventory of rebuildable development artifacts.</p>
+  <p class="total"><strong>{{ total_bytes }}</strong> across {{ candidate_count }} safe candidates</p>
+  <p class="review"><strong>{{ review_total_bytes }}</strong> across {{ review_candidate_count }} review-only observations</p>
+  <section class="summary">
+  {% for card in cards %}<article><span>{{ card.category }}</span><strong>{{ card.bytes }}</strong></article>{% endfor %}
+  </section>
+  <div class="table"><table><thead><tr><th>Category</th><th>Path</th><th>Size</th><th>Age</th><th>Evidence</th></tr></thead><tbody>
+  {% for row in rows %}<tr><td>{{ row.category }}</td><td><code>{{ row.path }}</code></td><td>{{ row.size }}</td><td>{{ row.age }}</td><td>{{ row.evidence }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  <section class="warnings"><h2>Warnings</h2><ul>{% for warning in warnings %}<li>{{ warning }}</li>{% endfor %}</ul></section>
+</main>
+</body>
+</html>

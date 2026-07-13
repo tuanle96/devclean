@@ -6,6 +6,8 @@ public enum CleanupCategory: String, Codable, CaseIterable, Identifiable, Sendab
     case frameworkCache = "framework-cache"
     case buildOutput = "build-output"
     case testCache = "test-cache"
+    case pythonCache = "python-cache"
+    case pythonEnvironment = "python-environment"
     case globalCache = "global-cache"
     case expensiveGlobalCache = "expensive-global-cache"
 
@@ -18,6 +20,8 @@ public enum CleanupCategory: String, Codable, CaseIterable, Identifiable, Sendab
         case .frameworkCache: "Framework cache"
         case .buildOutput: "Build output"
         case .testCache: "Test cache"
+        case .pythonCache: "Python cache"
+        case .pythonEnvironment: "Python environment"
         case .globalCache: "Tool cache"
         case .expensiveGlobalCache: "Runtime / model cache"
         }
@@ -30,6 +34,8 @@ public enum CleanupCategory: String, Codable, CaseIterable, Identifiable, Sendab
         case .frameworkCache: "square.stack.3d.up"
         case .buildOutput: "hammer"
         case .testCache: "checkmark.seal"
+        case .pythonCache: "chevron.left.forwardslash.chevron.right"
+        case .pythonEnvironment: "shippingbox.and.arrow.backward"
         case .globalCache: "tray.full"
         case .expensiveGlobalCache: "externaldrive"
         }
@@ -44,10 +50,16 @@ public enum Confidence: String, Codable, Sendable {
 
 public enum ReviewRule: String, Codable, Hashable, Sendable {
     case swiftPackageBuild = "swift-package-build"
+    case xcodeDerivedData = "xcode-derived-data"
+    case gradleBuild = "gradle-build"
+    case cocoaPods = "cocoa-pods"
 
     public var title: String {
         switch self {
         case .swiftPackageBuild: "SwiftPM build cache"
+        case .xcodeDerivedData: "Xcode DerivedData"
+        case .gradleBuild: "Gradle project cache"
+        case .cocoaPods: "CocoaPods dependencies"
         }
     }
 }
@@ -71,6 +83,20 @@ public struct CleanupCandidate: Codable, Hashable, Identifiable, Sendable {
         case modifiedAtUnix = "modified_at_unix"
         case confidence
         case approvedRule = "approved_rule"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        category = try values.decode(CleanupCategory.self, forKey: .category)
+        path = try values.decode(String.self, forKey: .path)
+        bytes = try values.decode(UInt64.self, forKey: .bytes)
+        reason = try values.decode(String.self, forKey: .reason)
+        modifiedAtUnix = try values.decodeIfPresent(UInt64.self, forKey: .modifiedAtUnix)
+        confidence = try values.decodeIfPresent(Confidence.self, forKey: .confidence)
+        // A rule this app version does not know yet must not fail the whole report,
+        // while a structurally malformed report still fails loudly.
+        approvedRule = try values.decodeIfPresent(String.self, forKey: .approvedRule)
+            .flatMap(ReviewRule.init(rawValue:))
     }
 }
 
@@ -104,7 +130,10 @@ public struct ReviewCandidate: Codable, Hashable, Identifiable, Sendable {
         reason = try values.decode(String.self, forKey: .reason)
         modifiedAtUnix = try values.decodeIfPresent(UInt64.self, forKey: .modifiedAtUnix)
         confidence = try values.decode(Confidence.self, forKey: .confidence)
-        suggestedRule = try values.decodeIfPresent(ReviewRule.self, forKey: .suggestedRule)
+        // A rule this app version does not know yet must not fail the whole report,
+        // while a structurally malformed report still fails loudly.
+        suggestedRule = try values.decodeIfPresent(String.self, forKey: .suggestedRule)
+            .flatMap(ReviewRule.init(rawValue:))
         projectRoot = try values.decodeIfPresent(String.self, forKey: .projectRoot)
         approved = try values.decodeIfPresent(Bool.self, forKey: .approved) ?? false
     }
@@ -157,24 +186,28 @@ public struct ScanReport: Codable, Equatable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         roots = try values.decode([String].self, forKey: .roots)
         candidates = try values.decode([CleanupCandidate].self, forKey: .candidates)
-        reviewCandidates = try values.decodeIfPresent(
-            [ReviewCandidate].self,
-            forKey: .reviewCandidates
-        ) ?? []
-        learningObservations = try values.decodeIfPresent(
-            [ArtifactObservation].self,
-            forKey: .learningObservations
-        ) ?? []
+        reviewCandidates =
+            try values.decodeIfPresent(
+                [ReviewCandidate].self,
+                forKey: .reviewCandidates
+            ) ?? []
+        learningObservations =
+            try values.decodeIfPresent(
+                [ArtifactObservation].self,
+                forKey: .learningObservations
+            ) ?? []
         warnings = try values.decode([String].self, forKey: .warnings)
         totalBytes = try values.decode(UInt64.self, forKey: .totalBytes)
-        reviewTotalBytes = try values.decodeIfPresent(
-            UInt64.self,
-            forKey: .reviewTotalBytes
-        ) ?? 0
-        observedTotalBytes = try values.decodeIfPresent(
-            UInt64.self,
-            forKey: .observedTotalBytes
-        ) ?? 0
+        reviewTotalBytes =
+            try values.decodeIfPresent(
+                UInt64.self,
+                forKey: .reviewTotalBytes
+            ) ?? 0
+        observedTotalBytes =
+            try values.decodeIfPresent(
+                UInt64.self,
+                forKey: .observedTotalBytes
+            ) ?? 0
         protectGitTracked = try values.decode(Bool.self, forKey: .protectGitTracked)
     }
 
@@ -236,7 +269,9 @@ public struct ScanSettings: Equatable, Sendable {
 
     public init(
         roots: [String] = [],
-        categories: Set<CleanupCategory> = [.rustTarget, .nodeModules, .frameworkCache],
+        categories: Set<CleanupCategory> = [
+            .rustTarget, .nodeModules, .frameworkCache, .pythonCache, .pythonEnvironment,
+        ],
         includeGlobalCaches: Bool = false,
         includeExpensiveCaches: Bool = false,
         olderThan: String? = "7d",

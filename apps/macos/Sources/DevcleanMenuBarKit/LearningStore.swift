@@ -59,18 +59,23 @@ private struct LearningState: Codable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         version = 2
         snapshots = try values.decodeIfPresent([LearningSnapshot].self, forKey: .snapshots) ?? []
-        feedback = try values.decodeIfPresent(
-            [String: FeedbackDecision].self,
-            forKey: .feedback
-        ) ?? [:]
-        cleanedAtUnix = try values.decodeIfPresent(
-            [String: UInt64].self,
-            forKey: .cleanedAtUnix
-        ) ?? [:]
-        approvedRules = try values.decodeIfPresent(
-            [String: ReviewRule].self,
-            forKey: .approvedRules
-        ) ?? [:]
+        // Entries written by a newer app version may use decisions or rules this build does
+        // not know. Dropping only those entries must never reset the rest of the state.
+        feedback =
+            (try values.decodeIfPresent(
+                [String: String].self,
+                forKey: .feedback
+            ) ?? [:]).compactMapValues(FeedbackDecision.init(rawValue:))
+        cleanedAtUnix =
+            try values.decodeIfPresent(
+                [String: UInt64].self,
+                forKey: .cleanedAtUnix
+            ) ?? [:]
+        approvedRules =
+            (try values.decodeIfPresent(
+                [String: String].self,
+                forKey: .approvedRules
+            ) ?? [:]).compactMapValues(ReviewRule.init(rawValue:))
     }
 }
 
@@ -86,13 +91,15 @@ public final class LearningStore {
         calendar: Calendar = .current
     ) {
         self.calendar = calendar
-        let selectedURL = stateURL ?? fileManager.homeDirectoryForCurrentUser
+        let selectedURL =
+            stateURL
+            ?? fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Devclean", isDirectory: true)
             .appendingPathComponent("learning.json")
         self.stateURL = selectedURL
         if let data = try? Data(contentsOf: selectedURL),
-           let decoded = try? JSONDecoder().decode(LearningState.self, from: data),
-             decoded.version == 2
+            let decoded = try? JSONDecoder().decode(LearningState.self, from: data),
+            decoded.version == 2
         {
             state = decoded
         } else {
@@ -102,7 +109,8 @@ public final class LearningStore {
 
     public func record(report: ScanReport, at date: Date = Date()) throws -> LearningSummary {
         let now = UInt64(max(0, date.timeIntervalSince1970))
-        let fallbackObservations = report.candidates.map {
+        let fallbackObservations =
+            report.candidates.map {
                 ArtifactObservation(
                     path: $0.path,
                     category: $0.category,
@@ -111,7 +119,8 @@ public final class LearningStore {
                     modifiedAtUnix: $0.modifiedAtUnix,
                     confidence: $0.confidence ?? .safe
                 )
-            } + report.reviewCandidates.map {
+            }
+            + report.reviewCandidates.map {
                 ArtifactObservation(
                     path: $0.path,
                     category: nil,
@@ -121,7 +130,8 @@ public final class LearningStore {
                     confidence: $0.confidence
                 )
             }
-        let source = report.learningObservations.isEmpty
+        let source =
+            report.learningObservations.isEmpty
             ? fallbackObservations
             : report.learningObservations
         let observations = source.map {
@@ -129,7 +139,7 @@ public final class LearningStore {
         }
         let snapshot = LearningSnapshot(observedAtUnix: now, observations: observations)
         if let last = state.snapshots.last,
-           now.saturatingSubtract(last.observedAtUnix) < 15 * 60
+            now.saturatingSubtract(last.observedAtUnix) < 15 * 60
         {
             state.snapshots[state.snapshots.count - 1] = snapshot
         } else {
@@ -151,12 +161,14 @@ public final class LearningStore {
         let currentBytes = current.observations.reduce(UInt64(0)) { $0.saturatingAdd($1.bytes) }
         let firstBytes = first.observations.reduce(UInt64(0)) { $0.saturatingAdd($1.bytes) }
         let growth = signedDifference(currentBytes, firstBytes)
-        let days = Set(state.snapshots.map {
-            calendar.startOfDay(for: Date(timeIntervalSince1970: TimeInterval($0.observedAtUnix)))
-        }).count
+        let days = Set(
+            state.snapshots.map {
+                calendar.startOfDay(for: Date(timeIntervalSince1970: TimeInterval($0.observedAtUnix)))
+            }
+        ).count
         let recreated = current.observations.reduce(into: 0) { count, observation in
             guard let cleanedAt = state.cleanedAtUnix[observation.path],
-                  current.observedAtUnix > cleanedAt
+                current.observedAtUnix > cleanedAt
             else { return }
             count += 1
         }
@@ -229,12 +241,12 @@ public final class LearningStore {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-          let data = try encoder.encode(state)
-          try data.write(to: stateURL, options: .atomic)
-          try FileManager.default.setAttributes(
-              [.posixPermissions: 0o600],
-              ofItemAtPath: stateURL.path
-          )
+        let data = try encoder.encode(state)
+        try data.write(to: stateURL, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: stateURL.path
+        )
     }
 
     private func signedDifference(_ left: UInt64, _ right: UInt64) -> Int64 {
@@ -256,12 +268,12 @@ public enum LearningStoreError: LocalizedError, Equatable {
     }
 }
 
-private extension UInt64 {
-    func saturatingAdd(_ other: UInt64) -> UInt64 {
+extension UInt64 {
+    fileprivate func saturatingAdd(_ other: UInt64) -> UInt64 {
         addingReportingOverflow(other).overflow ? .max : self + other
     }
 
-    func saturatingSubtract(_ other: UInt64) -> UInt64 {
+    fileprivate func saturatingSubtract(_ other: UInt64) -> UInt64 {
         self >= other ? self - other : 0
     }
 }

@@ -5,7 +5,9 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 /// A class of rebuildable development data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ValueEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ValueEnum,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum Category {
     /// Cargo compilation outputs with Rust-specific markers.
@@ -18,6 +20,10 @@ pub enum Category {
     BuildOutput,
     /// Test, mutation, type-checker, and lint caches.
     TestCache,
+    /// Python bytecode, test-runner environments, and other reproducible interpreter caches.
+    PythonCache,
+    /// Project-local Python virtual environments with a direct dependency manifest.
+    PythonEnvironment,
     /// Downloaded package-manager or tool caches.
     GlobalCache,
     /// Large runtimes or model caches that are expensive to restore.
@@ -43,18 +49,55 @@ pub enum Confidence {
 pub enum ReviewRule {
     /// A `.build` directory directly beside a Swift Package manifest.
     SwiftPackageBuild,
+    /// A `DerivedData` directory directly beside an Xcode project or workspace.
+    XcodeDerivedData,
+    /// A `.gradle` directory directly beside a Gradle build or settings script.
+    GradleBuild,
+    /// A `Pods` directory directly beside both a `CocoaPods` `Podfile` and `Podfile.lock`.
+    CocoaPods,
+}
+
+/// A declarative, config-defined cleanup rule with exact names and direct project markers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomRule {
+    /// Stable rule name shown in reports.
+    pub name: String,
+    /// Existing cleanup category used for filtering and presentation.
+    pub category: Category,
+    /// Exact directory names this rule may classify.
+    pub directory_names: Vec<String>,
+    /// Files that must exist directly beside the candidate.
+    pub required_markers: Vec<String>,
+    /// Human-readable evidence shown in cleanup plans.
+    pub reason: String,
+}
+
+impl ReviewRule {
+    /// Returns every rule Learning Mode can suggest, in suggestion order.
+    #[must_use]
+    pub fn all() -> [Self; 4] {
+        [
+            Self::SwiftPackageBuild,
+            Self::XcodeDerivedData,
+            Self::GradleBuild,
+            Self::CocoaPods,
+        ]
+    }
 }
 
 impl Category {
     /// Returns all categories discovered by a comprehensive scan.
     #[must_use]
-    pub fn all() -> [Self; 7] {
+    pub fn all() -> [Self; 9] {
         [
             Self::RustTarget,
             Self::NodeModules,
             Self::FrameworkCache,
             Self::BuildOutput,
             Self::TestCache,
+            Self::PythonCache,
+            Self::PythonEnvironment,
             Self::GlobalCache,
             Self::ExpensiveGlobalCache,
         ]
@@ -62,8 +105,14 @@ impl Category {
 
     /// Returns conservative categories used by `clean` unless overridden.
     #[must_use]
-    pub fn safe_defaults() -> [Self; 3] {
-        [Self::RustTarget, Self::NodeModules, Self::FrameworkCache]
+    pub fn safe_defaults() -> [Self; 5] {
+        [
+            Self::RustTarget,
+            Self::NodeModules,
+            Self::FrameworkCache,
+            Self::PythonCache,
+            Self::PythonEnvironment,
+        ]
     }
 }
 
@@ -75,10 +124,12 @@ impl fmt::Display for Category {
             Self::FrameworkCache => "framework-cache",
             Self::BuildOutput => "build-output",
             Self::TestCache => "test-cache",
+            Self::PythonCache => "python-cache",
+            Self::PythonEnvironment => "python-environment",
             Self::GlobalCache => "global-cache",
             Self::ExpensiveGlobalCache => "expensive-global-cache",
         };
-        formatter.write_str(value)
+        formatter.pad(value)
     }
 }
 
@@ -101,6 +152,9 @@ pub struct Candidate {
     /// Explicit learned rule that authorized this candidate, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_rule: Option<ReviewRule>,
+    /// Declarative rule that classified this candidate, if configured by the user or team.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_rule: Option<CustomRule>,
 }
 
 /// A large cache-like directory observed by Learning Mode but never selected for cleanup.
@@ -194,4 +248,27 @@ pub enum OutputFormat {
 pub struct RenderOptions {
     /// Replace absolute paths with stable root-relative placeholders.
     pub redact_paths: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_rule_wire_names_should_match_the_macos_app_contract() {
+        let encoded: Vec<String> = ReviewRule::all()
+            .iter()
+            .map(|rule| serde_json::to_string(rule).expect("rule serializes"))
+            .collect();
+
+        assert_eq!(
+            encoded,
+            [
+                r#""swift-package-build""#,
+                r#""xcode-derived-data""#,
+                r#""gradle-build""#,
+                r#""cocoa-pods""#,
+            ]
+        );
+    }
 }

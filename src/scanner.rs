@@ -1,7 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::ffi::OsStr;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -10,9 +9,16 @@ use directories::BaseDirs;
 use walkdir::WalkDir;
 
 use crate::model::{
-    Candidate, Category, Confidence, LearningObservation, ReviewCandidate, ReviewRule, ScanReport,
+    Candidate, Category, Confidence, CustomRule, LearningObservation, ReviewCandidate, ReviewRule,
+    ScanReport,
 };
-use crate::policy::{ExcludePolicy, contains_git_tracked_files};
+use crate::policy::{ExcludePolicy, GitTrackedGuard};
+
+mod global_caches;
+mod measurement;
+
+pub use global_caches::{expensive_global_cache_paths, global_cache_paths};
+use measurement::{ArtifactStats, measure_pending_artifacts};
 
 /// Scanner configuration.
 #[derive(Debug, Clone)]
@@ -39,6 +45,8 @@ pub struct ScanOptions {
     pub learning_mode: LearningMode,
     /// Exact review paths approved through a scanner-recognized learning rule.
     pub approved_review_paths: HashSet<PathBuf>,
+    /// Exact-name, direct-marker rules loaded from configuration.
+    pub custom_rules: Vec<CustomRule>,
 }
 
 /// Controls whether the scanner emits local growth observations.
@@ -63,6 +71,28 @@ struct ScanAccumulator {
     review_candidates: Vec<ReviewCandidate>,
     learning_observations: Vec<LearningObservation>,
     warnings: Vec<String>,
+    git_guard: GitTrackedGuard,
+}
+
+#[derive(Debug)]
+enum PendingKind {
+    Candidate(CandidateClassification),
+    Review { reason: &'static str },
+}
+
+#[derive(Debug)]
+struct CandidateClassification {
+    category: Category,
+    reason: String,
+    include_cleanup_candidate: bool,
+    custom_rule: Option<CustomRule>,
+}
+
+/// A classified directory awaiting size and modification-time measurement.
+#[derive(Debug)]
+struct PendingArtifact {
+    path: PathBuf,
+    kind: PendingKind,
 }
 
 /// Returns useful development roots without scanning the entire home directory.
@@ -70,7 +100,7 @@ struct ScanAccumulator {
 pub fn default_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(base) = BaseDirs::new() {
-        for relative in ["Dev", "Projects", "Documents/Codex"] {
+        for relative in ["Dev", "Projects"] {
             let candidate = base.home_dir().join(relative);
             if candidate.is_dir() {
                 roots.push(candidate);
@@ -103,13 +133,15 @@ pub fn scan(options: &ScanOptions) -> Result<ScanReport> {
         .collect();
 
     let excludes = ExcludePolicy::new(&options.excludes)?;
+    let mut pending = Vec::new();
     for root in &normalized_roots {
         scan_root(
             root,
             &normalized_roots,
             &effective_options,
             &excludes,
-            &mut output,
+            &mut pending,
+            &mut output.warnings,
         );
     }
 
@@ -118,13 +150,13 @@ pub fn scan(options: &ScanOptions) -> Result<ScanReport> {
             .categories
             .contains(&Category::GlobalCache)
     {
-        add_global_cache_candidates(
+        collect_global_cache_candidates(
             Category::GlobalCache,
             global_cache_paths,
             &normalized_roots,
-            &effective_options,
             &excludes,
-            &mut output,
+            &mut pending,
+            &mut output.warnings,
         );
     }
     if effective_options.include_expensive_caches
@@ -132,15 +164,17 @@ pub fn scan(options: &ScanOptions) -> Result<ScanReport> {
             .categories
             .contains(&Category::ExpensiveGlobalCache)
     {
-        add_global_cache_candidates(
+        collect_global_cache_candidates(
             Category::ExpensiveGlobalCache,
             expensive_global_cache_paths,
             &normalized_roots,
-            &effective_options,
             &excludes,
-            &mut output,
+            &mut pending,
+            &mut output.warnings,
         );
     }
+
+    process_pending_artifacts(pending, &effective_options, &mut output);
 
     output.candidates.sort_by(|left, right| {
         right
@@ -189,6 +223,24 @@ pub fn scan(options: &ScanOptions) -> Result<ScanReport> {
     })
 }
 
+fn process_pending_artifacts(
+    pending: Vec<PendingArtifact>,
+    options: &ScanOptions,
+    output: &mut ScanAccumulator,
+) {
+    let stats = measure_pending_artifacts(&pending);
+    for (artifact, stats) in pending.into_iter().zip(stats) {
+        match artifact.kind {
+            PendingKind::Candidate(classification) => {
+                add_candidate(&artifact.path, stats, classification, options, output);
+            }
+            PendingKind::Review { reason } => {
+                add_review_candidate(&artifact.path, stats, reason, options, output);
+            }
+        }
+    }
+}
+
 fn normalize_roots(roots: &[PathBuf], warnings: &mut Vec<String>) -> Result<Vec<PathBuf>> {
     let mut normalized = Vec::new();
     for root in roots {
@@ -212,7 +264,8 @@ fn scan_root(
     roots: &[PathBuf],
     options: &ScanOptions,
     excludes: &ExcludePolicy,
-    output: &mut ScanAccumulator,
+    pending: &mut Vec<PendingArtifact>,
+    warnings: &mut Vec<String>,
 ) {
     let mut walker = WalkDir::new(root)
         .max_depth(options.max_depth)
@@ -224,7 +277,7 @@ fn scan_root(
         let entry = match entry_result {
             Ok(entry) => entry,
             Err(error) => {
-                output.warnings.push(error.to_string());
+                warnings.push(error.to_string());
                 continue;
             }
         };
@@ -237,36 +290,53 @@ fn scan_root(
             continue;
         }
 
-        let Some((category, reason)) = classify(path) else {
+        let classified = classify(path)
+            .map(|(category, reason)| (category, reason.to_owned(), None))
+            .or_else(|| {
+                options.custom_rules.iter().find_map(|rule| {
+                    matches_custom_rule(path, rule)
+                        .then(|| (rule.category, rule.reason.clone(), Some(rule.clone())))
+                })
+            });
+        let Some((category, reason, custom_rule)) = classified else {
             if options.learning_mode.is_enabled() || options.approved_review_paths.contains(path) {
                 if let Some(reason) = classify_review_candidate(path) {
                     walker.skip_current_dir();
-                    add_review_candidate(path, reason, options, output);
+                    pending.push(PendingArtifact {
+                        path: path.to_path_buf(),
+                        kind: PendingKind::Review { reason },
+                    });
                 }
             }
             continue;
         };
         walker.skip_current_dir();
-        add_candidate(
-            path,
-            category,
-            reason,
-            options.categories.contains(&category),
-            options,
-            output,
-        );
+        pending.push(PendingArtifact {
+            path: path.to_path_buf(),
+            kind: PendingKind::Candidate(CandidateClassification {
+                category,
+                reason,
+                include_cleanup_candidate: options.categories.contains(&category),
+                custom_rule,
+            }),
+        });
     }
 }
 
 fn add_candidate(
     path: &Path,
-    category: Category,
-    reason: &'static str,
-    include_cleanup_candidate: bool,
+    stats: Result<ArtifactStats>,
+    classification: CandidateClassification,
     options: &ScanOptions,
     output: &mut ScanAccumulator,
 ) {
-    let stats = match artifact_stats(path) {
+    let CandidateClassification {
+        category,
+        reason,
+        include_cleanup_candidate,
+        custom_rule,
+    } = classification;
+    let stats = match stats {
         Ok(stats) => stats,
         Err(error) => {
             output
@@ -276,7 +346,7 @@ fn add_candidate(
         }
     };
     if options.protect_git_tracked {
-        match contains_git_tracked_files(path) {
+        match output.git_guard.contains_tracked_files(path) {
             Ok(true) => {
                 if options.learning_mode.is_enabled() {
                     output.learning_observations.push(LearningObservation {
@@ -309,7 +379,7 @@ fn add_candidate(
             path: path.to_path_buf(),
             category: Some(category),
             bytes: stats.bytes,
-            reason: reason.to_owned(),
+            reason: reason.clone(),
             modified_at_unix: stats.modified.and_then(system_time_to_unix),
             confidence: Confidence::Safe,
         });
@@ -324,20 +394,22 @@ fn add_candidate(
         category,
         path: path.to_path_buf(),
         bytes: stats.bytes,
-        reason: reason.to_owned(),
+        reason,
         modified_at_unix: stats.modified.and_then(system_time_to_unix),
         confidence: Confidence::Safe,
         approved_rule: None,
+        custom_rule,
     });
 }
 
 fn add_review_candidate(
     path: &Path,
+    stats: Result<ArtifactStats>,
     reason: &'static str,
     options: &ScanOptions,
     output: &mut ScanAccumulator,
 ) {
-    let stats = match artifact_stats(path) {
+    let stats = match stats {
         Ok(stats) => stats,
         Err(error) => {
             output
@@ -350,7 +422,7 @@ fn add_review_candidate(
         return;
     }
     if options.protect_git_tracked {
-        match contains_git_tracked_files(path) {
+        match output.git_guard.contains_tracked_files(path) {
             Ok(true) => {
                 output.learning_observations.push(LearningObservation {
                     path: path.to_path_buf(),
@@ -409,6 +481,7 @@ fn add_review_candidate(
                 modified_at_unix: stats.modified.and_then(system_time_to_unix),
                 confidence: Confidence::Safe,
                 approved_rule: Some(rule),
+                custom_rule: None,
             });
             return;
         }
@@ -427,8 +500,9 @@ fn add_review_candidate(
 
 fn suggested_review_rule(path: &Path) -> Option<(ReviewRule, PathBuf)> {
     let parent = path.parent()?;
-    classify_approved_review_candidate(path, ReviewRule::SwiftPackageBuild)
-        .map(|_| (ReviewRule::SwiftPackageBuild, parent.to_path_buf()))
+    ReviewRule::all().into_iter().find_map(|rule| {
+        classify_approved_review_candidate(path, rule).map(|_| (rule, parent.to_path_buf()))
+    })
 }
 
 /// Revalidates a user-approved review path against its scanner-owned rule.
@@ -440,16 +514,41 @@ pub fn classify_approved_review_candidate(
     if is_protected(path) {
         return None;
     }
+    let parent = path.parent()?;
     match rule {
-        ReviewRule::SwiftPackageBuild => {
-            let parent = path.parent()?;
-            (path.file_name() == Some(OsStr::new(".build"))
-                && parent.join("Package.swift").is_file())
-            .then_some((
-                Category::BuildOutput,
-                "user-approved Swift Package build directory",
-            ))
-        }
+        ReviewRule::SwiftPackageBuild => (path.file_name() == Some(OsStr::new(".build"))
+            && parent.join("Package.swift").is_file())
+        .then_some((
+            Category::BuildOutput,
+            "user-approved Swift Package build directory",
+        )),
+        ReviewRule::XcodeDerivedData => (path.file_name() == Some(OsStr::new("DerivedData"))
+            && has_xcode_container(parent))
+        .then_some((
+            Category::BuildOutput,
+            "user-approved Xcode DerivedData directory",
+        )),
+        ReviewRule::GradleBuild => (path.file_name() == Some(OsStr::new(".gradle"))
+            && !is_home_directory(parent)
+            && [
+                "build.gradle",
+                "build.gradle.kts",
+                "settings.gradle",
+                "settings.gradle.kts",
+            ]
+            .iter()
+            .any(|marker| parent.join(marker).is_file()))
+        .then_some((
+            Category::BuildOutput,
+            "user-approved Gradle project cache directory",
+        )),
+        ReviewRule::CocoaPods => (path.file_name() == Some(OsStr::new("Pods"))
+            && parent.join("Podfile").is_file()
+            && parent.join("Podfile.lock").is_file())
+        .then_some((
+            Category::BuildOutput,
+            "user-approved CocoaPods dependency directory",
+        )),
     }
 }
 
@@ -486,6 +585,13 @@ pub fn classify(path: &Path) -> Option<(Category, &'static str)> {
     ) {
         return Some((Category::FrameworkCache, "framework-generated cache"));
     }
+    if matches_name(name, &[".zig-cache", "zig-cache", "zig-out"])
+        && path
+            .parent()
+            .is_some_and(|parent| parent.join("build.zig").is_file())
+    {
+        return Some((Category::BuildOutput, "Zig compiler output"));
+    }
     if matches_name(
         name,
         &[
@@ -498,6 +604,24 @@ pub fn classify(path: &Path) -> Option<(Category, &'static str)> {
     ) {
         return Some((Category::TestCache, "test or analysis cache"));
     }
+    if name == OsStr::new("__pycache__") {
+        return Some((Category::PythonCache, "regenerable Python bytecode cache"));
+    }
+    if matches_name(name, &[".tox", ".nox"]) && path.parent().is_some_and(has_python_project_marker)
+    {
+        return Some((
+            Category::PythonCache,
+            "project-local Python test environment cache",
+        ));
+    }
+    if matches_name(name, &[".venv", "venv"])
+        && path.parent().is_some_and(has_python_project_marker)
+    {
+        return Some((
+            Category::PythonEnvironment,
+            "project-local Python virtual environment with dependency manifest",
+        ));
+    }
     if name == OsStr::new("build") && looks_like_project_build(path) {
         return Some((
             Category::BuildOutput,
@@ -505,6 +629,25 @@ pub fn classify(path: &Path) -> Option<(Category, &'static str)> {
         ));
     }
     None
+}
+
+/// Revalidates a config-defined rule using exact candidate names and direct sibling markers.
+#[must_use]
+pub fn matches_custom_rule(path: &Path, rule: &CustomRule) -> bool {
+    if is_protected(path) {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    rule.directory_names.iter().any(|value| value == name)
+        && rule
+            .required_markers
+            .iter()
+            .all(|marker| parent.join(marker).is_file())
 }
 
 fn classify_review_candidate(path: &Path) -> Option<&'static str> {
@@ -547,22 +690,60 @@ fn has_project_marker(path: &Path) -> bool {
             "pubspec.yaml",
             "build.gradle",
             "settings.gradle",
+            "build.gradle.kts",
+            "settings.gradle.kts",
+            "Podfile",
         ]
         .iter()
         .any(|marker| ancestor.join(marker).is_file())
-            || ancestor
-                .read_dir()
-                .ok()
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .any(|entry| entry.path().extension() == Some(OsStr::new("xcodeproj")))
+            || has_xcode_container(ancestor)
+    })
+}
+
+fn has_python_project_marker(path: &Path) -> bool {
+    [
+        "pyproject.toml",
+        "requirements.txt",
+        "requirements-dev.txt",
+        "Pipfile",
+        "Pipfile.lock",
+        "poetry.lock",
+        "uv.lock",
+        "setup.py",
+        "setup.cfg",
+        "tox.ini",
+        "noxfile.py",
+    ]
+    .iter()
+    .any(|marker| path.join(marker).is_file())
+}
+
+fn has_xcode_container(path: &Path) -> bool {
+    path.read_dir()
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry.file_type().is_ok_and(|file_type| file_type.is_dir())
+                && matches!(
+                    entry.path().extension().and_then(OsStr::to_str),
+                    Some("xcodeproj" | "xcworkspace")
+                )
+        })
+}
+
+/// The global `~/.gradle` holds credentials and is never a rebuildable project cache.
+fn is_home_directory(path: &Path) -> bool {
+    BaseDirs::new().is_some_and(|base| {
+        let home = base.home_dir();
+        path == home || home.canonicalize().is_ok_and(|canonical| path == canonical)
     })
 }
 
 fn should_prune(path: &Path) -> bool {
     path.file_name().is_some_and(|name| {
-        matches_name(name, &[".git", ".hg", ".svn", ".venv", "site-packages"])
+        matches_name(name, &[".git", ".hg", ".svn", "site-packages"])
             || name.to_string_lossy().starts_with(".devclean-quarantine-")
     })
 }
@@ -578,9 +759,18 @@ fn looks_like_project_build(path: &Path) -> bool {
     let Some(parent) = path.parent() else {
         return false;
     };
-    if ["package.json", "pubspec.yaml", "Cargo.toml"]
-        .iter()
-        .any(|marker| parent.join(marker).is_file())
+    if [
+        "package.json",
+        "pubspec.yaml",
+        "Cargo.toml",
+        "CMakeLists.txt",
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+    ]
+    .iter()
+    .any(|marker| parent.join(marker).is_file())
     {
         return true;
     }
@@ -622,138 +812,35 @@ fn matches_name(name: &OsStr, values: &[&str]) -> bool {
     values.iter().any(|value| name == OsStr::new(value))
 }
 
-fn add_global_cache_candidates(
+fn collect_global_cache_candidates(
     category: Category,
     paths: fn(&Path) -> Vec<PathBuf>,
     roots: &[PathBuf],
-    options: &ScanOptions,
     excludes: &ExcludePolicy,
-    output: &mut ScanAccumulator,
+    pending: &mut Vec<PendingArtifact>,
+    warnings: &mut Vec<String>,
 ) {
     let Some(base) = BaseDirs::new() else {
-        output
-            .warnings
-            .push("home directory is unavailable; global caches were skipped".to_owned());
+        warnings.push("home directory is unavailable; global caches were skipped".to_owned());
         return;
     };
     for path in paths(base.home_dir()) {
         if path.is_dir() && !excludes.matches(&path, roots) {
-            add_candidate(
-                &path,
-                category,
-                if category == Category::ExpensiveGlobalCache {
-                    "large downloaded runtime or model cache"
-                } else {
-                    "downloaded development-tool cache"
-                },
-                true,
-                options,
-                output,
-            );
+            pending.push(PendingArtifact {
+                path,
+                kind: PendingKind::Candidate(CandidateClassification {
+                    category,
+                    reason: if category == Category::ExpensiveGlobalCache {
+                        "large downloaded runtime or model cache".to_owned()
+                    } else {
+                        "downloaded development-tool cache".to_owned()
+                    },
+                    include_cleanup_candidate: true,
+                    custom_rule: None,
+                }),
+            });
         }
     }
-}
-
-/// Returns the exact allowlist for package and tool caches that are cheap to restore.
-#[must_use]
-pub fn global_cache_paths(home: &Path) -> Vec<PathBuf> {
-    let mut paths = [
-        ".npm/_cacache",
-        ".npm/_npx",
-        ".cargo/registry/cache",
-        ".cargo/registry/src",
-        ".cargo/registry/index",
-        ".cargo/git/db",
-        "go/pkg/mod",
-        ".cache/uv",
-        ".cache/pip",
-        ".cache/puppeteer",
-        ".cache/gem",
-        ".pub-cache/hosted",
-        ".pub-cache/hosted-hashes",
-        ".pub-cache/git",
-    ]
-    .into_iter()
-    .map(|relative| home.join(relative))
-    .collect::<Vec<_>>();
-    if cfg!(target_os = "macos") {
-        paths.extend(
-            [
-                "Library/pnpm",
-                "Library/Caches/ms-playwright",
-                "Library/Caches/node-gyp",
-            ]
-            .into_iter()
-            .map(|relative| home.join(relative)),
-        );
-    }
-    if cfg!(target_os = "windows") {
-        paths.extend(
-            [
-                "AppData/Local/npm-cache",
-                "AppData/Local/pnpm/store",
-                "AppData/Local/ms-playwright",
-                "AppData/Local/node-gyp/Cache",
-            ]
-            .into_iter()
-            .map(|relative| home.join(relative)),
-        );
-    }
-    paths
-}
-
-/// Returns the exact allowlist for caches that can be expensive to download again.
-#[must_use]
-pub fn expensive_global_cache_paths(home: &Path) -> Vec<PathBuf> {
-    [
-        ".cache/codex-runtimes",
-        ".cache/huggingface",
-        ".cache/whisper",
-    ]
-    .into_iter()
-    .map(|relative| home.join(relative))
-    .collect()
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ArtifactStats {
-    bytes: u64,
-    modified: Option<SystemTime>,
-}
-
-fn artifact_stats(path: &Path) -> Result<ArtifactStats> {
-    let mut bytes = 0_u64;
-    let mut modified = None;
-    #[cfg(unix)]
-    let mut seen = HashSet::new();
-
-    for entry in WalkDir::new(path)
-        .follow_links(false)
-        .same_file_system(true)
-    {
-        let entry = entry.with_context(|| format!("failed to walk {}", path.display()))?;
-        let metadata = fs::symlink_metadata(entry.path())
-            .with_context(|| format!("failed to inspect {}", entry.path().display()))?;
-        if let Ok(timestamp) = metadata.modified() {
-            if modified.is_none_or(|current| timestamp > current) {
-                modified = Some(timestamp);
-            }
-        }
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            if !seen.insert((metadata.dev(), metadata.ino())) {
-                continue;
-            }
-            bytes = bytes.saturating_add(metadata.blocks().saturating_mul(512));
-        }
-        #[cfg(not(unix))]
-        {
-            bytes = bytes.saturating_add(metadata.len());
-        }
-    }
-    Ok(ArtifactStats { bytes, modified })
 }
 
 fn is_old_enough(modified: Option<SystemTime>, minimum_age: Option<Duration>) -> bool {
@@ -774,8 +861,8 @@ fn system_time_to_unix(value: SystemTime) -> Option<u64> {
 
 /// Groups candidate bytes by category.
 #[must_use]
-pub fn totals_by_category(report: &ScanReport) -> HashMap<Category, u64> {
-    let mut totals = HashMap::new();
+pub fn totals_by_category(report: &ScanReport) -> BTreeMap<Category, u64> {
+    let mut totals = BTreeMap::new();
     for candidate in &report.candidates {
         *totals.entry(candidate.category).or_default() += candidate.bytes;
     }
@@ -804,6 +891,7 @@ mod tests {
             protect_git_tracked: false,
             learning_mode: LearningMode::Disabled,
             approved_review_paths: HashSet::new(),
+            custom_rules: Vec::new(),
         }
     }
 
@@ -834,6 +922,111 @@ mod tests {
         fs::create_dir_all(&modules)?;
 
         assert!(classify(&modules).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn classify_should_accept_python_virtual_environment_with_direct_manifest() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(
+            temporary.path().join("pyproject.toml"),
+            "[project]\nname='demo'\n",
+        )?;
+        let environment = temporary.path().join(".venv");
+        fs::create_dir_all(environment.join("lib/python/site-packages"))?;
+
+        assert!(matches!(
+            classify(&environment),
+            Some((Category::PythonEnvironment, _))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn classify_should_reject_unmarked_python_virtual_environment() -> Result<()> {
+        let temporary = tempdir()?;
+        let environment = temporary.path().join(".venv");
+        fs::create_dir_all(&environment)?;
+
+        assert!(classify(&environment).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn scan_should_find_python_bytecode_and_test_environments() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(
+            temporary.path().join("pyproject.toml"),
+            "[project]\nname='demo'\n",
+        )?;
+        fs::create_dir_all(temporary.path().join("src/__pycache__"))?;
+        fs::create_dir_all(temporary.path().join(".tox/py311"))?;
+        let report = scan(&options(
+            temporary.path(),
+            HashSet::from([Category::PythonCache]),
+        ))?;
+
+        assert_eq!(report.candidates.len(), 2);
+        assert!(
+            report
+                .candidates
+                .iter()
+                .all(|candidate| candidate.category == Category::PythonCache)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn classify_should_accept_gradle_cmake_and_zig_build_outputs() -> Result<()> {
+        let temporary = tempdir()?;
+        let gradle = temporary.path().join("gradle");
+        let cmake = temporary.path().join("cmake");
+        let zig = temporary.path().join("zig");
+        fs::create_dir_all(gradle.join("build"))?;
+        fs::create_dir_all(cmake.join("build"))?;
+        fs::create_dir_all(zig.join("zig-out"))?;
+        fs::write(gradle.join("build.gradle.kts"), "plugins {}")?;
+        fs::write(cmake.join("CMakeLists.txt"), "project(Demo)")?;
+        fs::write(zig.join("build.zig"), "const std = @import(\"std\");")?;
+
+        assert!(matches!(
+            classify(&gradle.join("build")),
+            Some((Category::BuildOutput, _))
+        ));
+        assert!(matches!(
+            classify(&cmake.join("build")),
+            Some((Category::BuildOutput, _))
+        ));
+        assert!(matches!(
+            classify(&zig.join("zig-out")),
+            Some((Category::BuildOutput, _))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn custom_rule_should_require_exact_name_and_every_direct_marker() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(temporary.path().join("project.lock"), "locked")?;
+        fs::write(temporary.path().join("project.toml"), "configured")?;
+        let generated = temporary.path().join("generated-cache");
+        fs::create_dir_all(&generated)?;
+        let rule = CustomRule {
+            name: "project-generated-cache".to_owned(),
+            category: Category::BuildOutput,
+            directory_names: vec!["generated-cache".to_owned()],
+            required_markers: vec!["project.toml".to_owned(), "project.lock".to_owned()],
+            reason: "team-approved generated cache".to_owned(),
+        };
+        let mut scan_options = options(temporary.path(), HashSet::from([Category::BuildOutput]));
+        scan_options.custom_rules.push(rule.clone());
+
+        let report = scan(&scan_options)?;
+
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(report.candidates[0].custom_rule, Some(rule.clone()));
+        fs::remove_file(temporary.path().join("project.lock"))?;
+        assert!(!matches_custom_rule(&generated, &rule));
         Ok(())
     }
 
@@ -1000,6 +1193,155 @@ mod tests {
         let report = scan(&scan_options)?;
 
         assert!(report.candidates.is_empty() && !report.review_candidates[0].approved);
+        Ok(())
+    }
+
+    #[test]
+    fn learning_mode_should_suggest_xcode_rule_for_derived_data() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::create_dir_all(temporary.path().join("App.xcodeproj"))?;
+        let derived = temporary.path().join("DerivedData");
+        fs::create_dir_all(&derived)?;
+        let mut scan_options = options(temporary.path(), HashSet::from(Category::all()));
+        scan_options.learning_mode = LearningMode::Enabled;
+
+        let report = scan(&scan_options)?;
+
+        assert_eq!(
+            report.review_candidates[0].suggested_rule,
+            Some(ReviewRule::XcodeDerivedData)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn learning_mode_should_suggest_gradle_rule_for_kotlin_dsl_project() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(temporary.path().join("build.gradle.kts"), "plugins {}")?;
+        fs::create_dir_all(temporary.path().join(".gradle"))?;
+        let mut scan_options = options(temporary.path(), HashSet::from(Category::all()));
+        scan_options.learning_mode = LearningMode::Enabled;
+
+        let report = scan(&scan_options)?;
+
+        assert_eq!(
+            report.review_candidates[0].suggested_rule,
+            Some(ReviewRule::GradleBuild)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn learning_mode_should_suggest_cocoapods_rule_with_lockfile() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(temporary.path().join("Podfile"), "platform :ios")?;
+        fs::write(temporary.path().join("Podfile.lock"), "PODS:\n")?;
+        fs::create_dir_all(temporary.path().join("Pods"))?;
+        let mut scan_options = options(temporary.path(), HashSet::from(Category::all()));
+        scan_options.learning_mode = LearningMode::Enabled;
+
+        let report = scan(&scan_options)?;
+
+        assert_eq!(
+            report.review_candidates[0].suggested_rule,
+            Some(ReviewRule::CocoaPods)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cocoapods_rule_should_reject_pods_without_lockfile() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(temporary.path().join("Podfile"), "platform :ios")?;
+        let pods = temporary.path().join("Pods");
+        fs::create_dir_all(&pods)?;
+        let mut scan_options = options(temporary.path(), HashSet::from(Category::all()));
+        scan_options.learning_mode = LearningMode::Enabled;
+
+        let report = scan(&scan_options)?;
+
+        assert_eq!(report.review_candidates.len(), 1);
+        assert!(report.review_candidates[0].suggested_rule.is_none());
+        assert!(
+            classify_approved_review_candidate(&pods, ReviewRule::CocoaPods).is_none(),
+            "a Podfile alone is not enough evidence for reproducible cleanup"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn approved_cocoapods_rule_should_promote_locked_pods_to_candidate() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(temporary.path().join("Podfile"), "platform :ios")?;
+        let lockfile = temporary.path().join("Podfile.lock");
+        fs::write(&lockfile, "PODS:\n")?;
+        let pods = temporary.path().join("Pods");
+        fs::create_dir_all(&pods)?;
+        fs::write(pods.join("dependency.m"), "generated")?;
+        let mut scan_options = options(temporary.path(), HashSet::new());
+        scan_options.learning_mode = LearningMode::Enabled;
+        scan_options.approved_review_paths.insert(pods.clone());
+
+        let report = scan(&scan_options)?;
+
+        assert_eq!(
+            report.candidates[0].approved_rule,
+            Some(ReviewRule::CocoaPods)
+        );
+        fs::remove_file(lockfile)?;
+        assert!(classify_approved_review_candidate(&pods, ReviewRule::CocoaPods).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn approved_gradle_rule_should_promote_cache_to_candidate() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(temporary.path().join("settings.gradle"), "rootProject")?;
+        let cache = temporary.path().join(".gradle");
+        fs::create_dir_all(&cache)?;
+        fs::write(cache.join("checksums.bin"), "generated")?;
+        let mut scan_options = options(temporary.path(), HashSet::new());
+        scan_options.learning_mode = LearningMode::Enabled;
+        scan_options.approved_review_paths.insert(cache);
+
+        let report = scan(&scan_options)?;
+
+        assert_eq!(
+            report.candidates[0].approved_rule,
+            Some(ReviewRule::GradleBuild)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gradle_rule_should_reject_the_global_gradle_directory_in_home() -> Result<()> {
+        let temporary = tempdir()?;
+        assert!(!is_home_directory(temporary.path()));
+        let home = BaseDirs::new().map(|base| base.home_dir().to_path_buf());
+        if let Some(home) = home {
+            assert!(is_home_directory(&home));
+            assert!(
+                classify_approved_review_candidate(&home.join(".gradle"), ReviewRule::GradleBuild)
+                    .is_none()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn derived_data_without_xcode_container_should_stay_unsuggested() -> Result<()> {
+        let temporary = tempdir()?;
+        fs::write(temporary.path().join("package.json"), "{}")?;
+        fs::create_dir_all(temporary.path().join("DerivedData"))?;
+        let mut scan_options = options(temporary.path(), HashSet::from(Category::all()));
+        scan_options.learning_mode = LearningMode::Enabled;
+
+        let report = scan(&scan_options)?;
+
+        assert!(
+            report.review_candidates[0].suggested_rule.is_none()
+                && !report.review_candidates[0].approved
+        );
         Ok(())
     }
 

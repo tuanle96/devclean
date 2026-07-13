@@ -10,13 +10,13 @@ let package = Package(
         .executable(name: "DevcleanMenuBar", targets: ["DevcleanMenuBar"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.13.0"),
+        .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.13.0")
     ],
     targets: [
         .target(
             name: "DevcleanMenuBarKit",
             dependencies: [
-                .product(name: "Sentry", package: "sentry-cocoa"),
+                .product(name: "Sentry", package: "sentry-cocoa")
             ]
         ),
         .executableTarget(

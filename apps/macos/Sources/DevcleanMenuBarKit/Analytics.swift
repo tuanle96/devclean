@@ -49,7 +49,9 @@ public final class LocalDiagnosticsLogger {
         fileManager: FileManager = .default,
         logDirectory: URL? = nil
     ) {
-        let selectedDirectory = logDirectory ?? fileManager.homeDirectoryForCurrentUser
+        let selectedDirectory =
+            logDirectory
+            ?? fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/Devclean", isDirectory: true)
         self.logDirectory = selectedDirectory
         logURL = selectedDirectory.appendingPathComponent("devclean.jsonl")
@@ -74,24 +76,24 @@ public final class LocalDiagnosticsLogger {
         guard let data = try? encoder.encode(record) else { return }
         var line = data
         line.append(0x0A)
-          if !FileManager.default.fileExists(atPath: logURL.path) {
-              FileManager.default.createFile(atPath: logURL.path, contents: line)
-              try? FileManager.default.setAttributes(
-                  [.posixPermissions: 0o600],
-                  ofItemAtPath: logURL.path
-              )
-              return
-          }
+        if !FileManager.default.fileExists(atPath: logURL.path) {
+            FileManager.default.createFile(atPath: logURL.path, contents: line)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: logURL.path
+            )
+            return
+        }
         guard let handle = try? FileHandle(forWritingTo: logURL) else { return }
         defer { try? handle.close() }
-          do {
-              try handle.seekToEnd()
-              try handle.write(contentsOf: line)
-              try? FileManager.default.setAttributes(
-                  [.posixPermissions: 0o600],
-                  ofItemAtPath: logURL.path
-              )
-          } catch {
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: line)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: logURL.path
+            )
+        } catch {
             // A logging failure must never block scanning or cleanup.
         }
     }
@@ -102,7 +104,7 @@ public final class LocalDiagnosticsLogger {
 
     private func rotateIfNeeded() {
         guard let size = try? logURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              UInt64(size) >= maximumBytes
+            UInt64(size) >= maximumBytes
         else { return }
         let previous = logDirectory.appendingPathComponent("devclean.previous.jsonl")
         try? FileManager.default.removeItem(at: previous)
@@ -132,13 +134,16 @@ public final class MonitoringCenter: AnalyticsService {
         bundle: Bundle = .main,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
-        sentryDSN = environment["DEVCLEAN_SENTRY_DSN"]
+        sentryDSN =
+            environment["DEVCLEAN_SENTRY_DSN"]
             ?? bundle.object(forInfoDictionaryKey: "DevcleanSentryDSN") as? String
         setRemoteConsent(defaults.bool(forKey: PreferenceKeys.anonymousDiagnostics))
-        track(.appLaunched, properties: [
-            "app_version": bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
-            "os_major": String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion),
-        ])
+        track(
+            .appLaunched,
+            properties: [
+                "app_version": bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
+                "os_major": String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion),
+            ])
     }
 
     public func setRemoteConsent(_ enabled: Bool) {
@@ -165,9 +170,9 @@ public final class MonitoringCenter: AnalyticsService {
         _ event: AnalyticsEventName,
         properties: [String: String] = [:]
     ) {
-          logger.write(level: "info", event: event.rawValue, properties: properties)
-          guard sentryStarted, event == .learningSummary else { return }
-          captureRemote(message: "devclean.learning_summary", properties: properties)
+        logger.write(level: "info", event: event.rawValue, properties: properties)
+        guard sentryStarted, event == .learningSummary else { return }
+        captureRemote(message: "devclean.learning_summary", properties: properties)
     }
 
     public func capture(error: Error, operation: String) {
@@ -180,32 +185,32 @@ public final class MonitoringCenter: AnalyticsService {
                 "error_type": fingerprint,
                 "local_message": error.localizedDescription,
             ]
-          )
-          guard sentryStarted else { return }
-          captureRemote(
-              message: "devclean.operation_failed",
-              properties: ["operation": operation, "error_type": fingerprint]
-          )
+        )
+        guard sentryStarted else { return }
+        captureRemote(
+            message: "devclean.operation_failed",
+            properties: ["operation": operation, "error_type": fingerprint]
+        )
     }
 
     public func openLocalLogs() {
         logger.openDirectory()
     }
 
-      private static func errorFingerprint(_ error: Error) -> String {
+    private static func errorFingerprint(_ error: Error) -> String {
         let nsError = error as NSError
         let domain = nsError.domain
             .replacingOccurrences(of: ".", with: "_")
             .replacingOccurrences(of: " ", with: "_")
             .lowercased()
-          return "\(domain)_\(nsError.code)"
-      }
+        return "\(domain)_\(nsError.code)"
+    }
 
-      private func captureRemote(message: String, properties: [String: String]) {
-          SentrySDK.capture(message: message) { scope in
-              for (key, value) in properties {
-                  scope.setTag(value: value, key: key)
-              }
-          }
-      }
-  }
+    private func captureRemote(message: String, properties: [String: String]) {
+        SentrySDK.capture(message: message) { scope in
+            for (key, value) in properties {
+                scope.setTag(value: value, key: key)
+            }
+        }
+    }
+}

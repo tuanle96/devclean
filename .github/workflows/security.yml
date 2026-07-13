@@ -31,3 +31,16 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5
+
+  fuzz:
+    name: Fuzz filter parsers
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: nightly-2026-07-11
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - run: cargo check --manifest-path fuzz/Cargo.toml --locked
+      - run: cargo +nightly-2026-07-11 fuzz run parse_filters -- -max_total_time=60

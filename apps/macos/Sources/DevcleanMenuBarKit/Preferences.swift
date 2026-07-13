@@ -10,13 +10,53 @@ public enum PreferenceKeys {
     public static let expensiveCaches = "scan.expensiveCaches"
     public static let learningMode = "learning.enabled"
     public static let safetyHoldDays = "learning.safetyHoldDays"
+    public static let aiInsightsEnabled = "aiInsights.enabled"
+    public static let aiInsightsProvider = "aiInsights.provider"
+    public static let aiMonitoringEnabled = "aiInsights.monitoringEnabled"
     public static let anonymousDiagnostics = "diagnostics.anonymousSharing"
+    public static let launchAtLogin = "app.launchAtLogin"
+    public static let scanNotifications = "app.scanNotifications"
 }
 
-public extension ScanSettings {
+/// Constrained choices for the Scan settings, replacing free-text DSL fields.
+/// Values map to strings the Rust CLI parses (`humantime` durations, `parse-size`
+/// byte sizes); an empty value disables that filter.
+public enum ScanFilterOptions {
+    public static let olderThan: [(value: String, label: String)] = [
+        ("", "Any age"),
+        ("1d", "Older than 1 day"),
+        ("3d", "Older than 3 days"),
+        ("7d", "Older than 7 days"),
+        ("14d", "Older than 14 days"),
+        ("30d", "Older than 30 days"),
+    ]
+
+    public static let minimumSize: [(value: String, label: String)] = [
+        ("", "Any size"),
+        ("100MB", "At least 100 MB"),
+        ("500MB", "At least 500 MB"),
+        ("1GB", "At least 1 GB"),
+        ("5GB", "At least 5 GB"),
+    ]
+
+    /// Snaps a stored value onto the nearest known option so a legacy "100MiB"
+    /// still selects a sensible row instead of showing blank.
+    public static func normalizedOlderThan(_ stored: String) -> String {
+        olderThan.map(\.value).contains(stored) ? stored : "7d"
+    }
+
+    public static func normalizedMinimumSize(_ stored: String) -> String {
+        if minimumSize.map(\.value).contains(stored) { return stored }
+        return stored.isEmpty ? "" : "100MB"
+    }
+}
+
+extension ScanSettings {
     @MainActor
-    static func load(from defaults: UserDefaults = .standard) -> ScanSettings {
-        var categories: Set<CleanupCategory> = [.rustTarget, .nodeModules, .frameworkCache]
+    public static func load(from defaults: UserDefaults = .standard) -> ScanSettings {
+        var categories: Set<CleanupCategory> = [
+            .rustTarget, .nodeModules, .frameworkCache, .pythonCache, .pythonEnvironment,
+        ]
         if defaults.bool(forKey: PreferenceKeys.buildOutputs) {
             categories.insert(.buildOutput)
         }
@@ -25,10 +65,12 @@ public extension ScanSettings {
         }
         let includeGlobalCaches = defaults.bool(forKey: PreferenceKeys.globalCaches)
         let includeExpensiveCaches = defaults.bool(forKey: PreferenceKeys.expensiveCaches)
-        let learningMode = defaults.object(forKey: PreferenceKeys.learningMode) == nil
+        let learningMode =
+            defaults.object(forKey: PreferenceKeys.learningMode) == nil
             ? true
             : defaults.bool(forKey: PreferenceKeys.learningMode)
-        let configuredHoldDays = defaults.object(forKey: PreferenceKeys.safetyHoldDays) == nil
+        let configuredHoldDays =
+            defaults.object(forKey: PreferenceKeys.safetyHoldDays) == nil
             ? 7
             : defaults.integer(forKey: PreferenceKeys.safetyHoldDays)
         if includeGlobalCaches {
@@ -38,7 +80,8 @@ public extension ScanSettings {
             categories.insert(.expensiveGlobalCache)
         }
 
-        let roots = defaults.string(forKey: PreferenceKeys.roots)?
+        let roots =
+            defaults.string(forKey: PreferenceKeys.roots)?
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty } ?? []
@@ -59,7 +102,7 @@ public extension ScanSettings {
             olderThan: olderThan,
             minimumSize: minimumSize,
             learningMode: learningMode,
-            quarantineFor: learningMode && configuredHoldDays > 0
+            quarantineFor: configuredHoldDays > 0
                 ? "\(configuredHoldDays)d"
                 : nil
         )

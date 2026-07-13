@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -9,6 +10,67 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 pub struct ExcludePolicy {
     patterns: Vec<String>,
     matcher: GlobSet,
+}
+
+/// Reuses repository-root discovery while validating multiple cleanup candidates.
+#[derive(Debug, Default)]
+pub struct GitTrackedGuard {
+    roots_by_directory: HashMap<PathBuf, Option<PathBuf>>,
+}
+
+impl GitTrackedGuard {
+    /// Returns true when Git tracks the candidate itself or content below it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git cannot inspect an applicable repository.
+    pub fn contains_tracked_files(&mut self, path: &Path) -> Result<bool> {
+        let probe = path.parent().unwrap_or(path);
+        let Some(root) = self.repository_root(probe)? else {
+            return Ok(false);
+        };
+        let relative = path
+            .strip_prefix(&root)
+            .with_context(|| format!("{} escaped Git root {}", path.display(), root.display()))?;
+        let output = Command::new("git")
+            .args(["-C"])
+            .arg(&root)
+            .args(["ls-files", "--"])
+            .arg(relative)
+            .output()
+            .context("failed to list Git-tracked files")?;
+        if !output.status.success() {
+            bail!("git ls-files failed for {}", path.display());
+        }
+        Ok(!output.stdout.is_empty())
+    }
+
+    fn repository_root(&mut self, probe: &Path) -> Result<Option<PathBuf>> {
+        let mut visited = Vec::new();
+        for ancestor in probe.ancestors() {
+            if let Some(cached) = self.roots_by_directory.get(ancestor).cloned() {
+                for directory in visited {
+                    self.roots_by_directory.insert(directory, cached.clone());
+                }
+                return Ok(cached);
+            }
+            visited.push(ancestor.to_path_buf());
+            if ancestor.join(".git").exists() {
+                let root = ancestor
+                    .canonicalize()
+                    .context("failed to normalize Git root")?;
+                for directory in visited {
+                    self.roots_by_directory
+                        .insert(directory, Some(root.clone()));
+                }
+                return Ok(Some(root));
+            }
+        }
+        for directory in visited {
+            self.roots_by_directory.insert(directory, None);
+        }
+        Ok(None)
+    }
 }
 
 impl ExcludePolicy {
@@ -59,41 +121,7 @@ impl ExcludePolicy {
 ///
 /// Returns an error when Git is installed but cannot inspect an applicable repository.
 pub fn contains_git_tracked_files(path: &Path) -> Result<bool> {
-    let probe = path.parent().unwrap_or(path);
-    if !probe
-        .ancestors()
-        .any(|ancestor| ancestor.join(".git").exists())
-    {
-        return Ok(false);
-    }
-    let root_output = Command::new("git")
-        .args(["-C"])
-        .arg(probe)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("failed to run git tracked-file guard")?;
-    if !root_output.status.success() {
-        return Ok(false);
-    }
-    let root_text =
-        String::from_utf8(root_output.stdout).context("git returned a non-UTF-8 root")?;
-    let root = PathBuf::from(root_text.trim())
-        .canonicalize()
-        .context("failed to normalize Git root")?;
-    let relative = path
-        .strip_prefix(&root)
-        .with_context(|| format!("{} escaped Git root {}", path.display(), root.display()))?;
-    let output = Command::new("git")
-        .args(["-C"])
-        .arg(&root)
-        .args(["ls-files", "--"])
-        .arg(relative)
-        .output()
-        .context("failed to list Git-tracked files")?;
-    if !output.status.success() {
-        bail!("git ls-files failed for {}", path.display());
-    }
-    Ok(!output.stdout.is_empty())
+    GitTrackedGuard::default().contains_tracked_files(path)
 }
 
 fn normalize(path: &Path) -> String {

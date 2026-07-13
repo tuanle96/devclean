@@ -1,0 +1,255 @@
+//! Local `SQLite` history for scan trends and cleanup outcomes.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result};
+use directories::BaseDirs;
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
+
+use crate::cleaner::CleanReport;
+use crate::model::{Category, ScanReport};
+use crate::scanner::totals_by_category;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HistorySummary {
+    pub days: u64,
+    pub scan_count: u64,
+    pub cleanup_count: u64,
+    pub latest_reclaimable_bytes: u64,
+    pub reclaimable_change_bytes: i64,
+    pub removed_bytes: u64,
+    pub quarantined_bytes: u64,
+    pub failures: u64,
+    pub category_change_bytes: BTreeMap<Category, i64>,
+}
+
+/// Returns the platform-local history database path.
+///
+/// # Errors
+///
+/// Returns an error when the platform data directory is unavailable.
+pub fn default_database_path() -> Result<PathBuf> {
+    let base = BaseDirs::new().context("platform data directory is unavailable")?;
+    Ok(base.data_local_dir().join("devclean/history.sqlite3"))
+}
+
+/// Records a privacy-local aggregate scan event.
+///
+/// # Errors
+///
+/// Returns an error when the database cannot be opened, migrated, or written.
+pub fn record_scan(report: &ScanReport, path: Option<&Path>) -> Result<()> {
+    let connection = open(path)?;
+    let categories = serde_json::to_string(&totals_by_category(report))?;
+    connection.execute(
+        "INSERT INTO scan_events(at_unix,total_bytes,candidate_count,categories_json) VALUES (?1,?2,?3,?4)",
+        params![to_i64(now_unix()), to_i64(report.total_bytes), to_i64(report.candidates.len() as u64), categories],
+    )?;
+    Ok(())
+}
+
+/// Records one cleanup outcome without storing candidate paths.
+///
+/// # Errors
+///
+/// Returns an error when the database cannot be opened, migrated, or written.
+pub fn record_cleanup(report: &CleanReport, path: Option<&Path>) -> Result<()> {
+    let connection = open(path)?;
+    connection.execute(
+        "INSERT INTO cleanup_events(at_unix,removed_bytes,quarantined_bytes,removed_count,held_count,failures) VALUES (?1,?2,?3,?4,?5,?6)",
+        params![
+            to_i64(now_unix()),
+            to_i64(report.removed_bytes),
+            to_i64(report.quarantined_bytes),
+            to_i64(report.removed.len() as u64),
+            to_i64(report.quarantined.len() as u64),
+            to_i64(report.failures.len() as u64),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Summarizes scan growth and cleanup outcomes over a rolling window.
+///
+/// # Errors
+///
+/// Returns an error when the database cannot be opened or queried.
+pub fn summarize(days: u64, path: Option<&Path>) -> Result<HistorySummary> {
+    let connection = open(path)?;
+    let since = now_unix().saturating_sub(days.saturating_mul(86_400));
+    let scan_count = query_u64(
+        &connection,
+        "SELECT COUNT(*) FROM scan_events WHERE at_unix >= ?1",
+        since,
+    )?;
+    let cleanup_count = query_u64(
+        &connection,
+        "SELECT COUNT(*) FROM cleanup_events WHERE at_unix >= ?1",
+        since,
+    )?;
+    let cleanup_totals = connection.query_row(
+        "SELECT COALESCE(SUM(removed_bytes),0),COALESCE(SUM(quarantined_bytes),0),COALESCE(SUM(failures),0) FROM cleanup_events WHERE at_unix >= ?1",
+        [to_i64(since)],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+    )?;
+    let first = scan_snapshot(&connection, since, "ASC")?;
+    let latest = scan_snapshot(&connection, since, "DESC")?;
+    let latest_bytes = latest.as_ref().map_or(0, |snapshot| snapshot.0);
+    let first_bytes = first.as_ref().map_or(latest_bytes, |snapshot| snapshot.0);
+    let category_change_bytes = category_delta(
+        first.as_ref().map(|snapshot| &snapshot.1),
+        latest.as_ref().map(|snapshot| &snapshot.1),
+    );
+
+    Ok(HistorySummary {
+        days,
+        scan_count,
+        cleanup_count,
+        latest_reclaimable_bytes: latest_bytes,
+        reclaimable_change_bytes: signed_delta(latest_bytes, first_bytes),
+        removed_bytes: from_i64(cleanup_totals.0),
+        quarantined_bytes: from_i64(cleanup_totals.1),
+        failures: from_i64(cleanup_totals.2),
+        category_change_bytes,
+    })
+}
+
+fn open(path: Option<&Path>) -> Result<Connection> {
+    let path = path.map_or_else(default_database_path, |value| Ok(value.to_path_buf()))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let connection = Connection::open(&path)
+        .with_context(|| format!("failed to open history database {}", path.display()))?;
+    connection.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         CREATE TABLE IF NOT EXISTS scan_events(id INTEGER PRIMARY KEY,at_unix INTEGER NOT NULL,total_bytes INTEGER NOT NULL,candidate_count INTEGER NOT NULL,categories_json TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS scan_events_at ON scan_events(at_unix);
+         CREATE TABLE IF NOT EXISTS cleanup_events(id INTEGER PRIMARY KEY,at_unix INTEGER NOT NULL,removed_bytes INTEGER NOT NULL,quarantined_bytes INTEGER NOT NULL,removed_count INTEGER NOT NULL,held_count INTEGER NOT NULL,failures INTEGER NOT NULL);
+         CREATE INDEX IF NOT EXISTS cleanup_events_at ON cleanup_events(at_unix);",
+    )?;
+    Ok(connection)
+}
+
+fn scan_snapshot(
+    connection: &Connection,
+    since: u64,
+    order: &str,
+) -> Result<Option<(u64, BTreeMap<Category, u64>)>> {
+    let sql = format!(
+        "SELECT total_bytes,categories_json FROM scan_events WHERE at_unix >= ?1 ORDER BY at_unix {order},id {order} LIMIT 1"
+    );
+    let raw = connection
+        .query_row(&sql, [to_i64(since)], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .optional()?;
+    raw.map(|(bytes, categories)| {
+        Ok((
+            from_i64(bytes),
+            serde_json::from_str::<BTreeMap<Category, u64>>(&categories)?,
+        ))
+    })
+    .transpose()
+}
+
+fn category_delta(
+    first: Option<&BTreeMap<Category, u64>>,
+    latest: Option<&BTreeMap<Category, u64>>,
+) -> BTreeMap<Category, i64> {
+    Category::all()
+        .into_iter()
+        .filter_map(|category| {
+            let old = first
+                .and_then(|values| values.get(&category))
+                .copied()
+                .unwrap_or(0);
+            let new = latest
+                .and_then(|values| values.get(&category))
+                .copied()
+                .unwrap_or(0);
+            let delta = signed_delta(new, old);
+            (delta != 0).then_some((category, delta))
+        })
+        .collect()
+}
+
+fn query_u64(connection: &Connection, sql: &str, since: u64) -> Result<u64> {
+    Ok(from_i64(connection.query_row(
+        sql,
+        [to_i64(since)],
+        |row| row.get(0),
+    )?))
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+fn signed_delta(new: u64, old: u64) -> i64 {
+    i64::try_from(
+        i128::from(new)
+            .saturating_sub(i128::from(old))
+            .clamp(i128::from(i64::MIN), i128::from(i64::MAX)),
+    )
+    .expect("clamped delta always fits in i64")
+}
+
+fn to_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn from_i64(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::model::{Candidate, Confidence};
+
+    #[test]
+    fn history_should_record_aggregate_scan_without_paths() -> Result<()> {
+        let temporary = tempdir()?;
+        let database = temporary.path().join("history.sqlite3");
+        let report = ScanReport {
+            roots: vec![temporary.path().to_path_buf()],
+            candidates: vec![Candidate {
+                category: Category::NodeModules,
+                path: temporary.path().join("private/node_modules"),
+                bytes: 2048,
+                reason: "test".to_owned(),
+                modified_at_unix: None,
+                confidence: Confidence::Safe,
+                approved_rule: None,
+                custom_rule: None,
+            }],
+            review_candidates: Vec::new(),
+            learning_observations: Vec::new(),
+            warnings: Vec::new(),
+            total_bytes: 2048,
+            review_total_bytes: 0,
+            observed_total_bytes: 0,
+            protect_git_tracked: true,
+        };
+
+        record_scan(&report, Some(&database))?;
+        let summary = summarize(30, Some(&database))?;
+        let raw = std::fs::read(&database)?;
+
+        assert_eq!(summary.scan_count, 1);
+        assert_eq!(summary.latest_reclaimable_bytes, 2048);
+        assert!(
+            !raw.windows(b"private/node_modules".len())
+                .any(|window| window == b"private/node_modules")
+        );
+        Ok(())
+    }
+}

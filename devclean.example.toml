@@ -1,10 +1,21 @@
 [scan]
-# roots = ["~/Dev", "~/Documents/Codex"]
+# roots = ["~/Dev", "~/Projects"]
 exclude = ["vendor/**", "archive/**"]
 older_than = "14d"
 min_size = "100MiB"
 max_depth = 24
 
+[watch]
+threshold = "5GiB"
+interval = "1h"
+
 [clean]
 protect_git_tracked = true
 expensive_caches = false
+
+[[rules]]
+name = "generated-api-client"
+category = "build-output"
+directory_names = ["generated-client"]
+required_markers = ["api-schema.yaml", "codegen.lock"]
+reason = "generated API client with pinned schema and generator lock"
