@@ -4,6 +4,8 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-14
+
 ### Added
 
 - Default-root discovery now checks existing `Dev`, `Developer`, `Projects`, `Code`, `src`, workspace/repository, GitHub, Android Studio, and IntelliJ project conventions without scanning the entire home directory.
@@ -174,7 +176,8 @@ All notable changes to this project are documented here following [Keep a Change
 - Conservative and comprehensive cleanup profiles.
 - Evidence-based artifact detection, global cache cleanup, Docker cleanup, and companion Codex skill.
 
-[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/tuanle96/devclean/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tuanle96/devclean/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/tuanle96/devclean/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/tuanle96/devclean/compare/v0.4.0...v0.4.1
