@@ -1,22 +1,22 @@
-# devclean v0.6.0
+# devclean v0.7.0
 
-This release teaches the CLI to explain disk history — not just measure it — and completes the Apple HIG pass for the DevCleaner menu bar app.
+This release makes the scanner meet developers where their code actually lives, and names every menu bar row after the project it belongs to.
 
-## Analysis and workspaces
+## Smarter scan roots
 
-- `devclean analyze` correlates a current read-only scan with aggregate local history to report stale categories, repeated growth, cleanup failures, and workspace concentration in table or JSON form. It never deletes anything.
-- Cargo, npm-workspaces, and Nx detection groups scan candidates under their nearest monorepo root and exposes additive workspace summaries in scan reports.
-- Global-cache discovery falls back to `go env GOMODCACHE` when `GOMODCACHE` is not set, accepting only absolute paths.
-- The local SQLite history schema is versioned with transactional migrations; legacy unversioned databases upgrade in place and newer unsupported schemas are rejected instead of misread.
+- Default-root discovery now checks existing `Dev`, `Developer`, `Projects`, `Code`, `src`, workspace/repository, GitHub, Android Studio, and IntelliJ project conventions — without scanning the entire home directory.
+- Scan roots are canonicalized, and nested or duplicate roots collapse before traversal.
+- The exact global-cache allowlist adds Gradle caches/distributions on every platform and Xcode DerivedData on macOS.
+- macOS Settings shows the automatic locations actually present on disk and labels custom-root override semantics.
 
-## macOS menu bar app
+## Project-first menu bar rows
 
-- Candidate lists are native Lists with keyboard row navigation, project names in row titles ("Rust target · VibeTG"), and content-sized viewports.
-- Cleanup and safety-hold confirmations use horizontal Mac alert button rows with Cancel beside the primary action, drop the extra "Back" step, and move VoiceOver focus into each dialog as it opens.
-- The Clean button states the selected size ("Clean 38.77 GB…"), "Delete All" moves into the Holds summary menu away from the window edge, and the Holds summary shows when the next hold expires.
-- AI recommendations keep a single manual entry point beside Scan, and the monitoring banner sits on a neutral material background that respects the system accent color.
-- The menu bar icon keeps one externaldrive silhouette across every state and pulses while busy on macOS 14+; tapping a background-scan notification activates DevCleaner.
-- Scan-status copy drops scanner jargon, the disk capacity bar explains its remaining "other used" slice and reads as one VoiceOver element, and Settings labels use consistent capitalization.
+- Every candidate, review, and hold row now leads with the owning project ("fastsoft-tg"), resolved from scanner-recognized workspace roots before falling back to the parent directory, which skips generic member folders like `services/` or `backend/`.
+- The artifact type moves to the icon tooltip, path suffix, and VoiceOver label; artifact age and hold expiry render as capsule chips beside the path, so titles never crowd or truncate.
+
+## Safety
+
+- CoreSimulator, Android SDK/AVD, JetBrains Local History, Docker Desktop storage, and the Gradle user-home root remain outside the filesystem cleanup allowlist.
 
 ## Verification
 
