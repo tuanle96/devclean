@@ -1,14 +1,20 @@
 use std::collections::{BTreeMap, HashSet};
-use std::io::IsTerminal as _;
+use std::io::{self, IsTerminal as _, Write as _};
 
 use anyhow::{Result, bail};
 use clap::Args as ClapArgs;
+use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::execute;
+use crossterm::queue;
+use crossterm::style::{
+    Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+};
+use crossterm::terminal::{
+    self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+    enable_raw_mode,
+};
 use devclean::{Category, ScanReport, human_bytes, load_config, scan};
-use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use super::{SharedScanArgs, scan_options, select_categories};
 
@@ -27,6 +33,26 @@ struct State {
     selected: HashSet<usize>,
 }
 
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn enter() -> Result<Self> {
+        enable_raw_mode()?;
+        if let Err(error) = execute!(io::stdout(), EnterAlternateScreen, Hide) {
+            let _ = disable_raw_mode();
+            return Err(error.into());
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stdout(), Show, LeaveAlternateScreen, ResetColor);
+        let _ = disable_raw_mode();
+    }
+}
+
 pub(super) fn run(arguments: &Args) -> Result<()> {
     let config = load_config(arguments.shared.config.as_deref())?;
     let categories = select_categories(&arguments.shared, true, false);
@@ -40,7 +66,7 @@ pub(super) fn run(arguments: &Args) -> Result<()> {
         print_snapshot(&report);
         return Ok(());
     }
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("tui requires an interactive terminal; use `scan` for non-interactive output");
     }
     if report.candidates.is_empty() {
@@ -49,21 +75,17 @@ pub(super) fn run(arguments: &Args) -> Result<()> {
     }
 
     let mut state = State::default();
-    let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, &report, &mut state);
-    ratatui::restore();
-    result?;
+    {
+        let _terminal = TerminalGuard::enter()?;
+        event_loop(&report, &mut state)?;
+    }
     print_selected_command(&report, &state.selected);
     Ok(())
 }
 
-fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
-    report: &ScanReport,
-    state: &mut State,
-) -> Result<()> {
+fn event_loop(report: &ScanReport, state: &mut State) -> Result<()> {
     loop {
-        terminal.draw(|frame| draw(frame, report, state))?;
+        draw(report, state)?;
         let Event::Key(key) = event::read()? else {
             continue;
         };
@@ -82,9 +104,7 @@ fn event_loop(
             KeyCode::Down | KeyCode::Char('j') => {
                 state.cursor = (state.cursor + 1).min(report.candidates.len() - 1);
             }
-            KeyCode::Char(' ') => {
-                toggle_selection(state);
-            }
+            KeyCode::Char(' ') => toggle_selection(state),
             KeyCode::Char('a') => state.selected.extend(0..report.candidates.len()),
             KeyCode::Char('n') => state.selected.clear(),
             _ => {}
@@ -98,81 +118,102 @@ fn toggle_selection(state: &mut State) {
     }
 }
 
-fn draw(frame: &mut ratatui::Frame<'_>, report: &ScanReport, state: &State) {
-    let [header, body, chart, footer] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(8),
-        Constraint::Length(7),
-        Constraint::Length(2),
-    ])
-    .areas(frame.area());
-    frame.render_widget(
-        Paragraph::new(format!(
-            "{} candidates · {} reclaimable · {} selected",
+fn draw(report: &ScanReport, state: &State) -> Result<()> {
+    let (width, height) = terminal::size()?;
+    let mut output = io::stdout();
+    queue!(output, MoveTo(0, 0), Clear(ClearType::All))?;
+    draw_line(
+        &mut output,
+        0,
+        width,
+        &format!(
+            "devclean tui — read-only plan · {} candidates · {} reclaimable · {} selected",
             report.candidates.len(),
             human_bytes(report.total_bytes),
             human_bytes(selected_bytes(report, &state.selected))
-        ))
-        .block(
-            Block::default()
-                .title(" devclean tui — read-only plan ")
-                .borders(Borders::ALL),
         ),
-        header,
-    );
+    )?;
+    draw_line(&mut output, 2, width, "candidates by project")?;
 
-    let items = report
+    let chart = category_chart(report);
+    let chart_lines = chart.lines().count().min(5);
+    let chart_height = u16::try_from(chart_lines).unwrap_or(5);
+    let visible_rows = usize::from(height.saturating_sub(chart_height.saturating_add(5))).max(1);
+    let start = state.cursor.saturating_sub(visible_rows.saturating_sub(1));
+    for (screen_row, (index, candidate)) in report
         .candidates
         .iter()
         .enumerate()
-        .map(|(index, candidate)| {
-            let mark = if state.selected.contains(&index) {
-                "[x]"
-            } else {
-                "[ ]"
-            };
-            let project = candidate
-                .path
-                .parent()
-                .map_or_else(|| "<root>".into(), |path| path.to_string_lossy());
-            ListItem::new(Line::from(format!(
-                "{mark} {} · {} · {}",
+        .skip(start)
+        .take(visible_rows)
+        .enumerate()
+    {
+        let mark = if state.selected.contains(&index) {
+            "[x]"
+        } else {
+            "[ ]"
+        };
+        let project = candidate
+            .path
+            .parent()
+            .map_or_else(|| "<root>".into(), |path| path.to_string_lossy());
+        let row = u16::try_from(screen_row)
+            .unwrap_or(u16::MAX)
+            .saturating_add(3);
+        if index == state.cursor {
+            queue!(
+                output,
+                SetForegroundColor(Color::Black),
+                SetBackgroundColor(Color::Cyan),
+                SetAttribute(Attribute::Bold)
+            )?;
+        }
+        draw_line(
+            &mut output,
+            row,
+            width,
+            &format!(
+                "{mark} {} · {} · {project}",
                 human_bytes(candidate.bytes),
-                candidate.category,
-                project
-            )))
-        });
-    let mut list_state = ListState::default().with_selected(Some(state.cursor));
-    frame.render_stateful_widget(
-        List::new(items)
-            .block(
-                Block::default()
-                    .title(" candidates by project ")
-                    .borders(Borders::ALL),
-            )
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                candidate.category
             ),
-        body,
-        &mut list_state,
-    );
-    frame.render_widget(
-        Paragraph::new(category_chart(report)).block(
-            Block::default()
-                .title(" disk usage by category ")
-                .borders(Borders::ALL),
-        ),
-        chart,
-    );
-    frame.render_widget(
-        Paragraph::new(
-            "↑/↓ move · Space toggle · a all · n none · Enter print exact clean command · q quit",
-        ),
-        footer,
-    );
+        )?;
+        if index == state.cursor {
+            queue!(output, ResetColor, SetAttribute(Attribute::Reset))?;
+        }
+    }
+
+    let chart_start = u16::try_from(visible_rows)
+        .unwrap_or(u16::MAX)
+        .saturating_add(3);
+    draw_line(&mut output, chart_start, width, "disk usage by category")?;
+    for (offset, line) in chart.lines().take(5).enumerate() {
+        draw_line(
+            &mut output,
+            chart_start
+                .saturating_add(u16::try_from(offset).unwrap_or(0))
+                .saturating_add(1),
+            width,
+            line,
+        )?;
+    }
+    draw_line(
+        &mut output,
+        height.saturating_sub(1),
+        width,
+        "↑/↓ move · Space toggle · a all · n none · Enter print exact clean command · q quit",
+    )?;
+    output.flush()?;
+    Ok(())
+}
+
+fn draw_line(output: &mut io::Stdout, row: u16, width: u16, value: &str) -> Result<()> {
+    let clipped = value
+        .chars()
+        .take(usize::from(width.saturating_sub(1)))
+        .collect::<String>();
+    queue!(output, MoveTo(0, row), Print(clipped))?;
+    Ok(())
 }
 
 fn category_chart(report: &ScanReport) -> String {
