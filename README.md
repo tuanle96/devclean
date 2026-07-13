@@ -76,6 +76,12 @@ devclean analyze --days 30 --stale-after-days 60 --redact-paths
 
 Run `devclean doctor` to inspect roots, config search paths, tools, and active safety guarantees.
 
+When no roots are supplied, `devclean` uses existing conventional project folders under the home
+directory: `Dev`, `Developer`, `Projects`, `Code`, `src`, `workspace`, `Workspaces`, `Repos`,
+`Repositories`, `GitHub`, `Documents/GitHub`, `AndroidStudioProjects`, and `IdeaProjects`. It never
+creates these folders or falls back to scanning the entire home directory. Explicit CLI/config roots
+replace automatic discovery; duplicate and nested roots are collapsed before traversal.
+
 ## What it cleans
 
 | Category | Default clean | Opt-in | Evidence |
@@ -88,12 +94,17 @@ Run `devclean doctor` to inspect roots, config search paths, tools, and active s
 | Build/test output | No | `--all` | Recognized manifest plus exact generated name |
 | Gradle/CMake/Zig output | No | `--all` | Direct build manifest plus `build`, `.zig-cache`, `zig-cache`, or `zig-out` |
 | Ambiguous cache-like output | Never | `--learning` observes only | Project marker plus names such as `dist`, `out`, `.cache`, or `coverage` |
-| Package/tool cache | No | `--global-caches` | Exact platform-aware allowlist; Go module cache honors `GOMODCACHE` or `go env GOMODCACHE` |
+| Build/package/tool cache | No | `--global-caches` | Exact platform-aware allowlist for package caches, Gradle cache/distributions, macOS Xcode DerivedData, and a Go module cache that honors `GOMODCACHE` or `go env GOMODCACHE` |
 | Model/runtime cache | No | `--expensive-caches` | Separate allowlist because redownload cost is high |
 | Docker build cache | No | `--docker` | `docker builder prune`, never volumes |
 | Docker system data | No | `--docker-system` | Stopped containers, unused images/networks/cache; never volumes |
 
 Ambiguous `dist`, `out`, and `coverage` directories can appear as Learning Mode review-only observations but never enter a cleanup plan. Archives, user data, databases, VCS metadata, and Docker volumes remain protected.
+
+The global-cache allowlist deliberately excludes the Gradle user-home root, CoreSimulator, Android
+SDK/AVD data, JetBrains system storage, and Docker Desktop's disk image. Those locations can contain
+credentials, toolchains, Local History, simulator state, or container data and require dedicated
+vendor-aware management rather than recursive filesystem deletion.
 
 ## Filters and selection
 

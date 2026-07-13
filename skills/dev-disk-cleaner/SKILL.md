@@ -39,6 +39,8 @@ For continuous read-only monitoring, run `watch --threshold 5GiB --interval 1h`.
 
 Use `analyze --days 30 --stale-after-days 60 --redact-paths` for deterministic local suggestions. It correlates the current scan with aggregate history, reports repeated category growth and workspace concentration, and does not grant cleanup authority. Workspace summaries recognize Cargo, npm workspaces, and Nx roots; candidate paths are still never persisted in SQLite.
 
+With no explicit roots, the helper discovers only existing conventional project folders under the home directory and collapses duplicate or nested paths. `--global-caches` additionally authorizes exact Gradle cache/distribution paths and macOS Xcode DerivedData. It does not authorize the Gradle user-home root, CoreSimulator, Android SDK/AVD, JetBrains system storage, or Docker Desktop files.
+
 ## Cleanup profiles
 
 Use conservative cleanup for Rust targets, JavaScript dependencies, and framework caches:

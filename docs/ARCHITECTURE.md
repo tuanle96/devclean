@@ -7,7 +7,7 @@
 - `config.rs`: strict TOML loading and human duration/size parsing.
 - `model.rs`: serializable categories, candidates, reports, and render options.
 - `policy.rs`: compiled excludes and the Git tracked-file guard.
-- `scanner.rs` and `scanner/`: bounded traversal, evidence-based classification, age/size filtering, platform cache allowlists, and allocated-size measurement.
+- `scanner.rs` and `scanner/`: conventional-root discovery, canonical root deduplication, bounded traversal, evidence-based classification, age/size filtering, platform cache allowlists, and allocated-size measurement.
 - `cleaner.rs`: containment/category/Git revalidation and quarantine-based deletion.
 - `quarantine.rs`: locked, private registry for persistent safety holds, restore, and expiry purge.
 - `docker.rs`: detailed usage, build-cache prune, and volume-preserving system prune.
@@ -35,6 +35,12 @@
 ```
 
 The scan report is not permanent deletion authority. Cleanup repeats live checks. Renaming the final path before recursive deletion narrows the time-of-check/time-of-use window and ensures a path swapped to a symlink is quarantined and rejected rather than followed.
+
+Automatic root discovery only considers a closed list of conventional project folders that already
+exist under the home directory. It does not create directories or scan the entire home directory.
+Canonicalization collapses duplicate and nested roots before traversal. Global cache cleanup uses a
+separate exact-path allowlist; managed developer storage such as CoreSimulator, Android SDK/AVD,
+JetBrains system data, and Docker Desktop's disk image is never promoted by root discovery.
 
 With `--quarantine-for`, the same validated rename becomes a persistent adjacent safety hold recorded in a locked 0600 registry. Holds remain on the same filesystem and therefore do not reclaim space until `quarantine purge`. Restore refuses to overwrite a recreated original path.
 

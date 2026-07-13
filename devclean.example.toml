@@ -1,5 +1,6 @@
 [scan]
-# roots = ["~/Dev", "~/Projects"]
+# Explicit roots replace automatic discovery of existing conventional project folders.
+# roots = ["~/Dev", "~/Projects", "~/workspace"]
 exclude = ["vendor/**", "archive/**"]
 older_than = "14d"
 min_size = "100MiB"
