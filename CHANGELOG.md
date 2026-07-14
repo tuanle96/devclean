@@ -4,6 +4,8 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-14
+
 ### Added
 
 - macOS menu bar gains a read-only Memory tab: kernel memory-pressure level, an active+wired+compressed usage bar, and the restartable dev tooling currently holding RAM (JVM daemons, JavaScript runtimes, simulators, container VMs, language servers, local databases). Rows lead with the owning project (from the process working directory) and a chip naming what the runtime actually executes (`vite.js`, `Gradle daemon`), so twenty `node` processes stay tellable apart. Sampling runs only while the menu is open; nothing is signaled, killed, or purged, and file cache is deliberately excluded from "used".
@@ -192,7 +194,8 @@ All notable changes to this project are documented here following [Keep a Change
 - Conservative and comprehensive cleanup profiles.
 - Evidence-based artifact detection, global cache cleanup, Docker cleanup, and companion Codex skill.
 
-[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/tuanle96/devclean/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/tuanle96/devclean/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/tuanle96/devclean/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tuanle96/devclean/compare/v0.5.0...v0.6.0
