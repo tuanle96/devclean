@@ -1,23 +1,18 @@
-# devclean v0.7.0
+# devclean v0.8.0
 
-This release makes the scanner meet developers where their code actually lives, and names every menu bar row after the project it belongs to.
+This release adopts Liquid Glass in the DevCleaner menu bar app and lands a fully tested dependency refresh.
 
-## Smarter scan roots
+## Liquid Glass on macOS 26
 
-- Default-root discovery now checks existing `Dev`, `Developer`, `Projects`, `Code`, `src`, workspace/repository, GitHub, Android Studio, and IntelliJ project conventions — without scanning the entire home directory.
-- Scan roots are canonicalized, and nested or duplicate roots collapse before traversal.
-- The exact global-cache allowlist adds Gradle caches/distributions on every platform and Xcode DerivedData on macOS.
-- macOS Settings shows the automatic locations actually present on disk and labels custom-root override semantics.
+- The three floating confirmation cards (cleanup, hold purge, AI recommendations) render as Liquid Glass on macOS 26 and keep their material-and-stroke look on macOS 13–15.
+- Standard controls already pick up the new appearance from the macOS 26 SDK build; banners, chips, and rows deliberately stay material per the floating-layer guidance.
 
-## Project-first menu bar rows
+## Dependency refresh
 
-- Every candidate, review, and hold row now leads with the owning project ("fastsoft-tg"), resolved from scanner-recognized workspace roots before falling back to the parent directory, which skips generic member folders like `services/` or `backend/`.
-- The artifact type moves to the icon tooltip, path suffix, and VoiceOver label; artifact age and hold expiry render as capsule chips beside the path, so titles never crowd or truncate.
-
-## Safety
-
-- CoreSimulator, Android SDK/AVD, JetBrains Local History, Docker Desktop storage, and the Gradle user-home root remain outside the filesystem cleanup allowlist.
+- `toml` 1.1, `rusqlite` 0.39, `crossterm` 0.29, `clap_mangen` 0.3, `uuid` 1.23.5, plus `actions/attest-build-provenance` v4, `actions/attest-sbom` v4, and `actions/setup-node` v6 in CI.
+- Cargo-workspace detection now parses manifests as TOML documents (`toml::Table`), matching the toml 1.x API — a unit test caught the silent behavior change.
+- rusqlite stays below 0.40 on purpose: its libsqlite3-sys needs Rust 1.95 and would break the crate's MSRV of 1.85. Dependabot now documents and skips that upgrade until the MSRV policy moves.
 
 ## Verification
 
-Release gates cover Rust formatting, Clippy with warnings denied, and cross-platform test suites; Swift strict format linting and the full menu bar contract test suite; and a signed, notarized, stapled universal macOS app published with checksums, SBOM, and provenance attestations.
+Release gates cover Rust formatting, Clippy with warnings denied, MSRV 1.85, and cross-platform test suites; Swift strict format linting and the full menu bar contract test suite; and a signed, notarized, stapled universal macOS app published with checksums, SBOM, and provenance attestations.
