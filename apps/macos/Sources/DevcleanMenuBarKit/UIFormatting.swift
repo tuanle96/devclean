@@ -110,6 +110,30 @@ struct MetaChip: View {
     }
 }
 
+/// Chrome for the floating modal cards. On macOS 26 the card is Liquid Glass;
+/// earlier systems keep the material-and-stroke look. Content layers (banners,
+/// chips, rows) deliberately stay material — glass is for the floating layer.
+struct ModalCardSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content
+                .glassEffect(in: RoundedRectangle(cornerRadius: 18))
+        } else {
+            content
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+        }
+    }
+}
+
+extension View {
+    func modalCardSurface() -> some View { modifier(ModalCardSurface()) }
+}
+
 /// One slice of the disk capacity bar shown in the header.
 struct CapacitySegment: Identifiable {
     let id: String
