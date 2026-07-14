@@ -4,6 +4,8 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-14
+
 ### Changed
 
 - Updated dependencies: `toml` 1.1, `rusqlite` 0.39, `crossterm` 0.29, `clap_mangen` 0.3, `uuid` 1.23; Cargo-workspace detection now parses manifests as TOML documents (`toml::Table`), matching the toml 1.x API. rusqlite stays below 0.40, whose libsqlite3-sys needs Rust 1.95 and would break the crate's MSRV of 1.85.
@@ -182,7 +184,8 @@ All notable changes to this project are documented here following [Keep a Change
 - Conservative and comprehensive cleanup profiles.
 - Evidence-based artifact detection, global cache cleanup, Docker cleanup, and companion Codex skill.
 
-[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/tuanle96/devclean/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/tuanle96/devclean/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/tuanle96/devclean/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tuanle96/devclean/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/tuanle96/devclean/compare/v0.4.1...v0.5.0
