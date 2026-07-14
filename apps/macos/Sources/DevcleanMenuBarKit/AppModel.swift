@@ -22,6 +22,7 @@ public final class AppModel: ObservableObject {
     private let client: DevcleanClient
     private let defaults: UserDefaults
     private let learningStore: LearningStore
+    private let reportCache = ReportCache()
     private let analytics: any AnalyticsService
     private let notifier = ScanNotifier()
     private var scanTask: Task<Void, Never>?
@@ -111,7 +112,12 @@ public final class AppModel: ObservableObject {
 
     public func initialLoad() {
         refreshAvailableSpace()
-        guard report == nil, !isBusy else { return }
+        guard !isBusy else { return }
+        // A cached report keeps every tab populated, but content older than
+        // this deserves a background refresh the moment the app is looked at.
+        let maxAge: TimeInterval = 30 * 60
+        let isFresh = lastScanDate.map { Date().timeIntervalSince($0) < maxAge } ?? false
+        guard report == nil || !isFresh else { return }
         Task {
             await purgeExpiredSafetyHolds(showStatus: false)
             scan()
@@ -121,6 +127,7 @@ public final class AppModel: ObservableObject {
     public func startBackgroundMonitoring() {
         guard !backgroundMonitoringStarted else { return }
         backgroundMonitoringStarted = true
+        restoreCachedReport()
         initialLoad()
         observationTimer = Timer.scheduledTimer(
             withTimeInterval: 6 * 60 * 60,
@@ -132,6 +139,21 @@ public final class AppModel: ObservableObject {
                 self.scan()
             }
         }
+    }
+
+    /// Shows the previous scan instantly on launch; `initialLoad` still kicks a
+    /// background refresh when the cache is stale. Never touches AI monitoring
+    /// or notifications — those react to fresh scans only.
+    private func restoreCachedReport() {
+        guard report == nil, let entry = reportCache.load() else { return }
+        report = entry.report
+        lastScanDate = entry.savedAt
+        selectedPaths = Set(
+            entry.report.candidates.compactMap { candidate in
+                learningStore.feedback(for: candidate.path) == .neverClean
+                    ? nil
+                    : candidate.path
+            })
     }
 
     public func scan() {
@@ -166,6 +188,7 @@ public final class AppModel: ObservableObject {
                 statusMessage = pendingLearningStatus ?? scanStatus(report)
                 pendingLearningStatus = nil
                 lastScanDate = Date()
+                reportCache.save(report: report)
                 refreshAvailableSpace()
                 await refreshQuarantine()
                 notifier.notifyIfSignificant(

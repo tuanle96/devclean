@@ -981,3 +981,99 @@ private func decodeReviewCandidate() throws -> ReviewCandidate {
         """#
     return try JSONDecoder().decode(ReviewCandidate.self, from: Data(json.utf8))
 }
+
+@Test
+func memoryClassifierRecognizesDevToolingOnly() {
+    #expect(DevProcessSampler.classify(executablePath: "/usr/local/bin/node") == "JavaScript runtime")
+    #expect(
+        DevProcessSampler.classify(executablePath: "/opt/homebrew/opt/openjdk/bin/java") == "JVM daemon")
+    #expect(
+        DevProcessSampler.classify(
+            executablePath: "/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/SimRenderServer"
+        ) == "iOS Simulator")
+    #expect(
+        DevProcessSampler.classify(
+            executablePath: "/Applications/Docker.app/Contents/MacOS/com.docker.backend"
+        ) == "Docker Desktop")
+    #expect(
+        DevProcessSampler.classify(executablePath: "/opt/homebrew/bin/qemu-system-aarch64")
+            == "Virtual machine")
+    #expect(
+        DevProcessSampler.classify(executablePath: "/Applications/Safari.app/Contents/MacOS/Safari")
+            == nil)
+    #expect(DevProcessSampler.classify(executablePath: "/usr/libexec/trustd") == nil)
+}
+
+@Test
+func memorySnapshotReportsSaneSystemTotals() {
+    let snapshot = MemoryMonitor.sample()
+    #expect(snapshot.totalBytes > 0)
+    #expect(snapshot.usedBytes > 0)
+    #expect(snapshot.usedBytes <= snapshot.totalBytes)
+    let bytes = snapshot.devProcesses.map(\.bytes)
+    #expect(bytes == bytes.sorted(by: >))
+    #expect(bytes.allSatisfy { $0 >= DevProcessSampler.footprintThreshold })
+}
+
+@Test
+func devProcessDetailTellsGenericRuntimesApart() {
+    #expect(
+        DevProcessSampler.detail(
+            command: "java",
+            arguments: ["java", "-Xmx4g", "org.gradle.launcher.daemon.bootstrap.GradleDaemon"]
+        ) == "Gradle daemon")
+    #expect(
+        DevProcessSampler.detail(
+            command: "java",
+            arguments: ["java", "-cp", "x.jar", "org.jetbrains.kotlin.daemon.KotlinCompileDaemon"]
+        ) == "Kotlin daemon")
+    #expect(DevProcessSampler.detail(command: "java", arguments: ["java", "-jar", "app.jar"]) == nil)
+    #expect(
+        DevProcessSampler.detail(
+            command: "node",
+            arguments: ["node", "--max-old-space-size=4096", "/repo/node_modules/vite/bin/vite.js"]
+        ) == "vite.js")
+    #expect(
+        DevProcessSampler.detail(
+            command: "node",
+            arguments: ["node", "/x/@anthropic-ai/claude-code/cli.js"]
+        ) == "Claude Code")
+    #expect(DevProcessSampler.detail(command: "node", arguments: ["node"]) == nil)
+    #expect(DevProcessSampler.detail(command: "node", arguments: []) == nil)
+}
+
+@Test
+func devProcessProjectComesFromWorkingDirectoryBasename() {
+    let home = "/Users/me"
+    #expect(
+        DevProcessSampler.projectName(fromWorkingDirectory: "/Users/me/Dev/devclean", home: home)
+            == "devclean")
+    #expect(DevProcessSampler.projectName(fromWorkingDirectory: "/Users/me", home: home) == nil)
+    #expect(DevProcessSampler.projectName(fromWorkingDirectory: "/", home: home) == nil)
+}
+
+@Test
+func reportCacheRoundTripsAScanReport() throws {
+    let json = #"""
+        {
+          "roots": ["/Users/me/Dev"],
+          "candidates": [],
+          "warnings": ["skipped"],
+          "total_bytes": 42,
+          "protect_git_tracked": true
+        }
+        """#
+    let report = try JSONDecoder().decode(ScanReport.self, from: Data(json.utf8))
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("devclean-report-cache-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let cache = ReportCache(directory: directory)
+    #expect(cache.load() == nil)
+    let savedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    cache.save(report: report, at: savedAt)
+
+    let entry = try #require(cache.load())
+    #expect(entry.report == report)
+    #expect(entry.savedAt == savedAt)
+}

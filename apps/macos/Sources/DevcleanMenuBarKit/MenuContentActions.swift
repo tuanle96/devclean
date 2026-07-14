@@ -59,6 +59,9 @@ extension MenuContentView {
                     // "Delete All" lives in the Holds summary menu, away from the
                     // window edge; nothing competes with Scan down here.
                     EmptyView()
+                case .memory:
+                    // Read-only monitor; termination stays out of Swift entirely.
+                    EmptyView()
                 }
             }
         }
