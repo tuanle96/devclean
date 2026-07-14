@@ -6,6 +6,8 @@ All notable changes to this project are documented here following [Keep a Change
 
 ### Changed
 
+- Updated dependencies: `toml` 1.1, `rusqlite` 0.39, `crossterm` 0.29, `clap_mangen` 0.3, `uuid` 1.23; Cargo-workspace detection now parses manifests as TOML documents (`toml::Table`), matching the toml 1.x API. rusqlite stays below 0.40, whose libsqlite3-sys needs Rust 1.95 and would break the crate's MSRV of 1.85.
+- Release and CI workflows moved to `actions/attest-build-provenance` v4, `actions/attest-sbom` v4, and `actions/setup-node` v6.
 - macOS modal confirmation cards adopt Liquid Glass on macOS 26 while keeping the material-and-stroke look on macOS 13–15; banners, chips, and rows deliberately stay material per the floating-layer guidance.
 
 ## [0.7.0] - 2026-07-14

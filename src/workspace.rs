@@ -122,8 +122,8 @@ fn kinds_at(directory: &Path) -> Vec<WorkspaceKind> {
 fn is_cargo_workspace(directory: &Path) -> bool {
     fs::read_to_string(directory.join("Cargo.toml"))
         .ok()
-        .and_then(|source| source.parse::<toml::Value>().ok())
-        .is_some_and(|manifest| manifest.get("workspace").is_some())
+        .and_then(|source| toml::from_str::<toml::Table>(&source).ok())
+        .is_some_and(|manifest| manifest.contains_key("workspace"))
 }
 
 fn is_npm_workspace(directory: &Path) -> bool {
