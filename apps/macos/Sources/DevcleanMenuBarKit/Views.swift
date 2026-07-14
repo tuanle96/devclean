@@ -17,6 +17,8 @@ public struct MenuContentView: View {
     @State var savedSelection: Set<String>?
     /// Keyboard focus for the candidate lists (arrow-key navigation).
     @State var listFocus: String?
+    /// Latest read-only memory sample; refreshed only while the menu is open.
+    @State var memorySnapshot: MemorySnapshot?
     /// Moves VoiceOver into a modal card the moment it is presented.
     @AccessibilityFocusState var overlayFocus: OverlayFocusTarget?
 
@@ -68,7 +70,13 @@ public struct MenuContentView: View {
                 chooseInitialSectionIfNeeded()
             }
         }
+        // A manual tab choice is final: without this, the first scan finishing
+        // would yank the user off Memory (the one tab that is live mid-scan).
+        .onChange(of: selectedSection) { _ in
+            didChooseInitialSection = true
+        }
         .task { model.initialLoad() }
+        .task { await sampleMemoryWhileVisible() }
     }
 
     var isPresentingOverlay: Bool {

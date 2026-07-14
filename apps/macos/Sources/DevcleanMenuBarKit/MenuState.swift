@@ -27,6 +27,7 @@ enum MenuSection: String, CaseIterable, Identifiable {
     case clean
     case review
     case holds
+    case memory
 
     var id: String { rawValue }
 

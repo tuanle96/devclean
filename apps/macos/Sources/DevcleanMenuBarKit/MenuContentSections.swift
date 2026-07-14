@@ -11,6 +11,8 @@ extension MenuContentView {
                 .tag(MenuSection.review)
             Text(sectionLabel("Holds", count: model.quarantineEntries.count))
                 .tag(MenuSection.holds)
+            Text(sectionLabel("Memory", count: memorySnapshot?.devProcesses.count ?? 0))
+                .tag(MenuSection.memory)
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -138,6 +140,8 @@ extension MenuContentView {
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+        case .memory:
+            memorySummary
         }
     }
 
@@ -285,7 +289,9 @@ extension MenuContentView {
 
     @ViewBuilder
     var content: some View {
-        if model.phase == .scanning, model.report == nil {
+        // Memory is sampled locally and never waits on the disk scan — checking
+        // it during a long first scan is a legitimate use.
+        if model.phase == .scanning, model.report == nil, selectedSection != .memory {
             HStack(spacing: 10) {
                 ProgressView()
                 Text("Scanning development artifacts…")
@@ -300,6 +306,8 @@ extension MenuContentView {
                 reviewContent
             case .holds:
                 holdsContent
+            case .memory:
+                memoryContent
             }
         }
     }

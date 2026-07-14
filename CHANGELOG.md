@@ -4,6 +4,14 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+### Added
+
+- macOS menu bar gains a read-only Memory tab: kernel memory-pressure level, an active+wired+compressed usage bar, and the restartable dev tooling currently holding RAM (JVM daemons, JavaScript runtimes, simulators, container VMs, language servers, local databases). Rows lead with the owning project (from the process working directory) and a chip naming what the runtime actually executes (`vite.js`, `Gradle daemon`), so twenty `node` processes stay tellable apart. Sampling runs only while the menu is open; nothing is signaled, killed, or purged, and file cache is deliberately excluded from "used".
+
+### Changed
+
+- The macOS app now caches the last scan report on disk and restores it at launch, so reopening the app shows the previous results immediately instead of blocking every tab behind the first scan; a background refresh still runs when the cache is older than 30 minutes. Cleanup safety is unchanged — the Rust CLI revalidates every exact path, so a stale cached candidate can never be deleted.
+
 ## [0.8.0] - 2026-07-14
 
 ### Changed
