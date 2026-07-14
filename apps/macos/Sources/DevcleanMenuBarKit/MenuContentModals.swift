@@ -33,12 +33,7 @@ extension MenuContentView {
             }
             .padding(20)
             .frame(width: 380)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+            .modalCardSurface()
             .padding(20)
             .accessibilityAddTraits(.isModal)
         }
@@ -86,12 +81,7 @@ extension MenuContentView {
             }
             .padding(20)
             .frame(width: 380)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+            .modalCardSurface()
             .padding(20)
             .accessibilityAddTraits(.isModal)
         }

@@ -4,6 +4,10 @@ All notable changes to this project are documented here following [Keep a Change
 
 ## [Unreleased]
 
+### Changed
+
+- macOS modal confirmation cards adopt Liquid Glass on macOS 26 while keeping the material-and-stroke look on macOS 13–15; banners, chips, and rows deliberately stay material per the floating-layer guidance.
+
 ## [0.7.0] - 2026-07-14
 
 ### Added
